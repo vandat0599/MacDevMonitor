@@ -40,6 +40,7 @@ final class AppModel {
 
     let settings = AppSettings()
     let deepClean = DeepCleanModel()
+    let permissions = PermissionsModel()
     var selectedSection: DashboardSection = .overview
     private(set) var snapshot = MachineSnapshot()
     private(set) var issues: [HealthIssue] = []
@@ -63,6 +64,7 @@ final class AppModel {
         guard !loopsStarted else { return }
         loopsStarted = true
         requestNotificationPermission()
+        permissions.startWatching { [unowned self] in settings.repoRoots }
         Task { await refreshFast(includeProcesses: true); await refreshFull() }
         Task { await fastLoop() }
         Task { await fullLoop() }

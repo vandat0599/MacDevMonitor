@@ -1,7 +1,6 @@
 import Foundation
 import MonitorCore
 import Observation
-import ServiceManagement
 
 @MainActor @Observable
 final class AppSettings {
@@ -52,17 +51,6 @@ final class AppSettings {
             largeProcess: Self.bytes(largeProcessGB), swapWarnFraction: 0.8, freePercentWarn: 20,
             diskWarn: Self.bytes(diskWarnGB), diskCritical: Self.bytes(min(diskWarnGB, 10)),
             stuckAfter: stuckHours * 3600, uptimeWarnDays: uptimeWarnDays)
-    }
-
-    var launchAtLogin: Bool {
-        get { SMAppService.mainApp.status == .enabled }
-        set {
-            do {
-                if newValue { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-            } catch {
-                NSLog("Launch at login change failed: \(error.localizedDescription)")
-            }
-        }
     }
 
     private static func bytes(_ gigabytes: Double) -> Int64 { Int64(gigabytes * 1_073_741_824) }

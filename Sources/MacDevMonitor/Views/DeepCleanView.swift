@@ -33,6 +33,7 @@ struct DeepCleanView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
+                PermissionsCard()
                 switch deep.phase {
                 case .intro: intro
                 case .scanning: scanList(showResults: true)

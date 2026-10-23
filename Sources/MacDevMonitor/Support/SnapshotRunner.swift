@@ -21,6 +21,9 @@ enum SnapshotRunner {
                              to: "\(outputDirectory)/\(section.rawValue.replacingOccurrences(of: " ", with: "-")).png")
             }
             await render(MenuBarView().environment(model), size: CGSize(width: 360, height: 600), to: "\(outputDirectory)/MenuBar.png")
+            await model.permissions.refresh(repoRoots: model.settings.repoRoots)
+            await render(PermissionsCard(startExpanded: true).environment(model).padding(24), size: CGSize(width: 980, height: 820),
+                         to: "\(outputDirectory)/Permissions.png")
             // Deep Clean's scan only reads; it never cleans here.
             await model.deepClean.scan(model)
             await render(DeepCleanView().environment(model), size: CGSize(width: 980, height: 2600),

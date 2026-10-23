@@ -30,7 +30,8 @@ struct SettingsView: View {
                 Section("Behaviour") {
                     Toggle("Notify me about warnings", isOn: $settings.notificationsEnabled)
                     Toggle("Move deleted folders to the Trash instead of deleting them", isOn: $settings.moveToTrash)
-                    Toggle("Open at login", isOn: Binding(get: { settings.launchAtLogin }, set: { settings.launchAtLogin = $0 }))
+                    Text("Open at login, notifications and other permissions are in the Permissions tab.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
@@ -50,8 +51,11 @@ struct SettingsView: View {
             }
             .formStyle(.grouped)
             .tabItem { Label("Thresholds", systemImage: "slider.horizontal.3") }
+
+            ScrollView { PermissionsCard().padding(16) }
+                .tabItem { Label("Permissions", systemImage: "lock.shield") }
         }
-        .frame(width: 520, height: 420)
+        .frame(width: 620, height: 520)
         .onChange(of: settings.repoRoots) { Task { await model.refreshFull() } }
     }
 

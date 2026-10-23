@@ -32,6 +32,22 @@ One button (menu bar, Overview, or the Deep Clean page) that makes the Mac fresh
 3. **Clean** — runs the ticked items in a safe order (stop processes → delete → restart fseventsd → restart last),
    each re-checking the Mac first, then shows before vs. now for memory, swap, disk and fseventsd and the space freed.
 
+## Permissions
+
+The top of Deep Clean (and Settings → Permissions) lists everything the app relies on, whether it's granted,
+why it's needed, and a button to grant it — or to open the right System Settings pane when macOS doesn't allow asking:
+
+| Permission | Why | |
+|---|---|---|
+| Documents/Desktop/Downloads folder (whichever holds your repo folders) | Find worktrees and build folders inside repos | Required |
+| Notifications | Warnings with the dashboard closed | Optional |
+| Automation → loginwindow | Open the system restart dialog | Optional |
+| Full Disk Access | Accurate sizes for protected caches (System Settings only) | Optional |
+| Open at login | Monitor from login | Optional |
+| Administrator password | Restart fseventsd — asked by macOS each time, never stored | — |
+
+Statuses refresh whenever the app comes back to the front, e.g. after you change them in System Settings.
+
 ## What it watches
 
 | Page | Shows | Can do (always after a confirmation) |
