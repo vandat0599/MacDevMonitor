@@ -1,13 +1,49 @@
 import MonitorCore
 import SwiftUI
 
+/// Dev Tools: every stack's caches, plus Xcode's build data, simulators and git worktrees, as tabs.
 struct DevToolsView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        VStack(spacing: 0) {
+            Picker("", selection: $model.devToolsTab) {
+                ForEach(DevToolsTab.allCases) { tab in
+                    let count = model.issues.filter { issue in tab.issueIDs.contains(where: issue.id.hasPrefix) }.count
+                    Text(count > 0 ? "\(tab.rawValue) (\(count))" : tab.rawValue).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 620)
+            .padding(.top, 14)
+            .padding(.horizontal, 24)
+            DevToolsTabContent(tab: model.devToolsTab)
+        }
+    }
+}
+
+struct DevToolsTabContent: View {
+    var tab: DevToolsTab
+
+    var body: some View {
+        switch tab {
+        case .tools: DevToolsCachesView()
+        case .buildData: BuildDataView()
+        case .simulators: SimulatorsView()
+        case .worktrees: WorktreesView()
+        }
+    }
+}
+
+struct DevToolsCachesView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                PageHeader(title: "Dev Tools", subtitle: "Caches, build output, containers and repositories from every stack you work in: JavaScript, Python, JVM/Android, Rust, Go, Ruby, Dart, .NET, Docker, Git.")
+                PageHeader(title: "Tools & Caches", subtitle: "Caches, build output, containers and repositories from every stack you work in: JavaScript, Python, JVM/Android, Rust, Go, Ruby, Dart, .NET, Docker, Git.")
                 if let dev = model.snapshot.dev {
                     summary(dev)
                     servers

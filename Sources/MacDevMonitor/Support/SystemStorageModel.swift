@@ -2,7 +2,7 @@ import AppKit
 import MonitorCore
 import Observation
 
-/// The System Storage page: the access gate, the scan, what's ticked, and removal.
+/// The Storage page: the access gate, the scan, what's ticked, and removal.
 @MainActor @Observable
 final class SystemStorageModel {
     enum Phase: Equatable { case idle, scanning(String), ready, removing }
@@ -93,7 +93,10 @@ final class SystemStorageModel {
         case .settings(let url, _):
             if let url = URL(string: url) { NSWorkspace.shared.open(url) }
         case .otherPage(let page, _):
-            if let section = DashboardSection.allCases.first(where: { $0.rawValue == page }) { app.selectedSection = section }
+            if let (section, tab) = DashboardSection.destination(forPage: page) {
+                if let tab { app.devToolsTab = tab }
+                app.selectedSection = section
+            }
         default:
             break
         }

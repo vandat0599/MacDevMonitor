@@ -84,7 +84,7 @@ public enum HealthEvaluator {
             issues.append(HealthIssue(
                 id: "free-memory", severity: memory.pressure == .critical ? .critical : .warning,
                 title: "Memory is running low",
-                detail: "\(memory.freePercent)% free, pressure \(memory.pressure.label). Check the Memory tab for the biggest processes."))
+                detail: "\(memory.freePercent)% free, pressure \(memory.pressure.label). Check the Memory page for the biggest processes."))
         }
         // Swap "used" stays high after memory is freed, so it only matters while free memory is also low.
         if memory.swapFraction > t.swapWarnFraction, memory.freePercent < t.freePercentWarn * 2 {
@@ -117,7 +117,7 @@ public enum HealthEvaluator {
             issues.append(HealthIssue(
                 id: "large-\(process.pid)", severity: .warning,
                 title: "\(process.command) is using \(ByteSize.format(process.footprint))",
-                detail: "PID \(process.pid). Quit it from the Processes tab if it isn't doing work you need."))
+                detail: "PID \(process.pid). Quit it from the Memory page if it isn't doing work you need."))
         }
         if !p.stuck.isEmpty {
             let kinds = Set(p.stuck.map(\.rule)).sorted().joined(separator: ", ")

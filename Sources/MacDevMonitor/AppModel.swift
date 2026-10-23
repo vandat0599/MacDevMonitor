@@ -51,6 +51,7 @@ final class AppModel {
     /// Bytes each process grew over the last ten minutes.
     private(set) var growth: [Int32: Int64] = [:]
     var selectedSection: DashboardSection = .overview
+    var devToolsTab: DevToolsTab = .tools
     private(set) var snapshot = MachineSnapshot()
     private(set) var issues: [HealthIssue] = []
     private(set) var history: [MemorySample] = []

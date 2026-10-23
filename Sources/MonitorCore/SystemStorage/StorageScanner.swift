@@ -82,6 +82,7 @@ public struct SystemStorageScanner: Sendable {
         let systemLogs = children("/Library/Logs")
         let simCaches = children("/Library/Developer/CoreSimulator/Caches")
         let archives = children(lib + "/Developer/Xcode/Archives")
+        let deviceSupport = children(lib + "/Developer/Xcode/iOS DeviceSupport")
         let installers = children("/Applications").filter { ($0 as NSString).lastPathComponent.hasPrefix("Install macOS") }
         let downloads = children(home + "/Downloads").filter { ["dmg", "pkg", "ipsw", "xip", "iso"].contains(($0 as NSString).pathExtension.lowercased()) }
         let userTemp = Self.confstr(_CS_DARWIN_USER_TEMP_DIR)
@@ -97,7 +98,7 @@ public struct SystemStorageScanner: Sendable {
         ] + [userTemp, userCache].compactMap { $0 }
 
         var everything = Set(assets)
-        for list in [tmp, userCaches, systemCaches, appSupportChildren, containers, knownAppData, aiStores.map(\.0),
+        for list in [tmp, deviceSupport, userCaches, systemCaches, appSupportChildren, containers, knownAppData, aiStores.map(\.0),
                      backups, userLogs, systemLogs, simCaches, archives, installers, downloads, fixed] {
             everything.formUnion(list)
         }
@@ -185,14 +186,21 @@ public struct SystemStorageScanner: Sendable {
         // MARK: Developer data
         let devPages: [(String, String, String, String)] = [
             (lib + "/Developer/Xcode/DerivedData", "Xcode DerivedData", "Build output and indexes for every project Xcode opened.", "Build Data"),
-            (lib + "/Developer/Xcode/iOS DeviceSupport", "iOS DeviceSupport", "Debug symbols copied from each iPhone and iOS version you connected.", "Storage"),
             (lib + "/Developer/CoreSimulator/Devices", "Simulator devices", "Every simulator you created, with its apps and data.", "Simulators"),
             ("/Library/Developer/CoreSimulator/Cryptex", "Simulator runtimes (system part)", "The part of each simulator runtime macOS keeps sealed.", "Simulators"),
         ]
         for (path, title, detail, page) in devPages where big(path) {
             add(.developer, StorageEntry(
-                id: "dev:" + path, title: title, detail: detail, riskReason: "Managed on the \(page) page, which knows what's in use.",
-                owner: .developer, risk: .rebuilds, paths: [path], size: size(path), removal: .otherPage(page, steps: "Open \(page) to choose what to remove.")))
+                id: "dev:" + path, title: title, detail: detail, riskReason: "Managed in Dev Tools › \(page), which knows what's in use.",
+                owner: .developer, risk: .rebuilds, paths: [path], size: size(path), removal: .otherPage(page, steps: "Open Dev Tools › \(page) to choose what to remove.")))
+        }
+        for path in deviceSupport where big(path) {
+            add(.developer, StorageEntry(
+                id: "devicesupport:" + path, title: "iOS DeviceSupport: \((path as NSString).lastPathComponent)",
+                detail: "Debug symbols Xcode copied from a device running this iOS version.",
+                riskReason: "Xcode copies them again (a few minutes) the next time a device with this version connects.",
+                owner: .developer, risk: .rebuilds, paths: [path], size: size(path), removal: .delete([path]),
+                modified: SizeReader.modificationDate(path)))
         }
         let simCacheTotal = sum(simCaches)
         if (simCacheTotal ?? 0) >= minimumBytes {

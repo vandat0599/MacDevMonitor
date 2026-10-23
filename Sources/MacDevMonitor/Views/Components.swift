@@ -5,14 +5,9 @@ enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
     case overview = "Overview"
     case deepClean = "Deep Clean"
     case memory = "Memory"
-    case processes = "Processes"
+    case storage = "Storage"
     case devTools = "Dev Tools"
     case applications = "Applications"
-    case worktrees = "Worktrees"
-    case buildData = "Build Data"
-    case simulators = "Simulators"
-    case storage = "Storage"
-    case systemStorage = "System Storage"
     case activity = "Activity"
 
     var id: String { rawValue }
@@ -22,14 +17,9 @@ enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
         case .overview: "gauge.with.dots.needle.50percent"
         case .deepClean: "sparkles"
         case .memory: "memorychip"
-        case .processes: "cpu"
         case .devTools: "wrench.and.screwdriver"
         case .applications: "square.grid.2x2"
-        case .worktrees: "arrow.triangle.branch"
-        case .buildData: "hammer"
-        case .simulators: "iphone"
         case .storage: "internaldrive"
-        case .systemStorage: "chart.pie"
         case .activity: "clock.arrow.circlepath"
         }
     }
@@ -37,13 +27,36 @@ enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
     /// Issue id prefixes shown as this section's badge.
     var issueIDs: [String] {
         switch self {
-        case .overview, .deepClean, .activity, .devTools, .applications, .systemStorage: []
-        case .memory: ["fseventsd", "free-memory", "swap", "uptime", "large-"]
-        case .processes: ["stuck", "zombies"]
-        case .worktrees: ["worktrees"]
+        case .overview, .deepClean, .activity, .applications: []
+        case .memory: ["fseventsd", "free-memory", "swap", "uptime", "large-", "stuck", "zombies"]
+        case .devTools: DevToolsTab.allCases.flatMap(\.issueIDs)
+        case .storage: ["disk"]
+        }
+    }
+
+    /// Where a page named in core code ("Simulators", "Build Data", …) now lives.
+    static func destination(forPage page: String) -> (DashboardSection, DevToolsTab?)? {
+        if let tab = DevToolsTab.allCases.first(where: { $0.rawValue == page }) { return (.devTools, tab) }
+        if let section = allCases.first(where: { $0.rawValue == page }) { return (section, nil) }
+        return nil
+    }
+}
+
+/// The tabs inside Dev Tools.
+enum DevToolsTab: String, CaseIterable, Identifiable, Hashable {
+    case tools = "Tools & Caches"
+    case buildData = "Build Data"
+    case simulators = "Simulators"
+    case worktrees = "Worktrees"
+
+    var id: String { rawValue }
+
+    var issueIDs: [String] {
+        switch self {
+        case .tools: []
         case .buildData: ["derived-data"]
         case .simulators: ["simulators"]
-        case .storage: ["disk"]
+        case .worktrees: ["worktrees"]
         }
     }
 }

@@ -100,7 +100,7 @@ public enum KnownProcesses {
         "lldb-rpc-server": dev("Xcode's debugger. It can hold gigabytes after long sessions; stopping it ends any debugging session in progress.", .caution),
         "SWBBuildService": dev("Xcode's build system. It stays while Xcode is open.", .caution, restarts: true),
         "XCBBuildService": dev("Xcode's build system. It stays while Xcode is open.", .caution, restarts: true),
-        "launchd_sim": dev("A booted iOS simulator. Shut it down from Simulator or the Simulators page."),
+        "launchd_sim": dev("A booted iOS simulator. Shut it down from Simulator or Dev Tools › Simulators."),
         "node": dev("A Node.js process: a dev server, watcher, build tool or editor extension."),
         "bun": dev("A Bun process: a dev server, script or test runner."),
         "deno": dev("A Deno process."),

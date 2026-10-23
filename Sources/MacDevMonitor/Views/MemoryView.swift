@@ -17,6 +17,7 @@ struct MemoryView: View {
                 ForEach(model.issues.filter { DashboardSection.memory.issueIDs.contains(where: $0.id.hasPrefix) }) { IssueCard(issue: $0) }
                 HistoryCharts()
                 ProcessListSection()
+                ProcessHealthCards()
             }
             .padding(24)
         }

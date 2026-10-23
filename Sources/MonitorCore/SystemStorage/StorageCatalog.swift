@@ -52,7 +52,7 @@ public enum SystemAssets {
         }
         if key.contains("iOSSimulatorRuntime") || key.contains("SimulatorRuntime") {
             return asset("Simulator runtime downloads", "iOS, watchOS and visionOS simulator runtimes Xcode downloaded.", in: .developer, owner: .developer,
-                         .otherPage("Simulators", steps: "Delete runtimes you no longer test on in Simulators, or Xcode › Settings › Components."))
+                         .otherPage("Simulators", steps: "Delete runtimes you no longer test on in Dev Tools › Simulators, or Xcode › Settings › Components."))
         }
         if key.contains("DeveloperDocumentation") {
             return asset("Xcode documentation", "The offline copy of Apple's developer documentation.", in: .developer, owner: .developer,

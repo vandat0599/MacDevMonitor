@@ -51,14 +51,9 @@ struct SectionContent: View {
         case .overview: OverviewView()
         case .deepClean: DeepCleanView()
         case .memory: MemoryView()
-        case .processes: ProcessesView()
         case .devTools: DevToolsView()
         case .applications: ApplicationsView()
-        case .worktrees: WorktreesView()
-        case .buildData: BuildDataView()
-        case .simulators: SimulatorsView()
         case .storage: StorageView()
-        case .systemStorage: SystemStorageView()
         case .activity: ActivityView()
         }
     }

@@ -21,6 +21,12 @@ enum SnapshotRunner {
                 await render(SectionContent(section: section).environment(model), size: CGSize(width: 980, height: tall.contains(section) ? 2600 : 1500),
                              to: "\(outputDirectory)/\(section.rawValue.replacingOccurrences(of: " ", with: "-")).png")
             }
+            for tab in DevToolsTab.allCases {
+                model.devToolsTab = tab
+                await render(DevToolsView().environment(model), size: CGSize(width: 980, height: tab == .tools ? 2600 : 1500),
+                             to: "\(outputDirectory)/Dev-Tools-\(tab.rawValue.replacingOccurrences(of: " ", with: "-").replacingOccurrences(of: "&", with: "and")).png")
+            }
+            model.devToolsTab = .tools
             await render(MenuBarView().environment(model), size: CGSize(width: 360, height: 600), to: "\(outputDirectory)/MenuBar.png")
             let detailName = ProcessInfo.processInfo.environment["MDM_SNAPSHOT_APP"] ?? "Android Studio"
             if let app = model.snapshot.apps?.apps.first(where: { $0.name == detailName }) {
@@ -31,15 +37,15 @@ enum SnapshotRunner {
             await model.memoryScan.scan(model)
             await render(MemoryView().environment(model), size: CGSize(width: 1100, height: 3400), to: "\(outputDirectory)/Memory-Scan.png")
             await render(MenuBarView().environment(model), size: CGSize(width: 360, height: 760), to: "\(outputDirectory)/MenuBar-Scan.png")
-            // System Storage: the gate as a user without Full Disk Access sees it, then the explorer (read-only scan).
+            // Storage: the gate as a user without Full Disk Access sees it, then the explorer (read-only scan).
             model.systemStorage.overrideAccess(fullDiskAccess: false, admin: true)
-            await render(SystemStorageView().environment(model), size: CGSize(width: 1100, height: 1000), to: "\(outputDirectory)/System-Storage-Gate.png")
+            await render(StorageView().environment(model), size: CGSize(width: 1100, height: 1000), to: "\(outputDirectory)/Storage-Gate.png")
             model.systemStorage.overrideAccess(fullDiskAccess: true, admin: true)
             await model.systemStorage.scan()
-            await render(SystemStorageView().environment(model), size: CGSize(width: 1100, height: 6000), to: "\(outputDirectory)/System-Storage-Explorer.png")
+            await render(StorageView().environment(model), size: CGSize(width: 1100, height: 6000), to: "\(outputDirectory)/Storage-Explorer.png")
             if let entry = model.systemStorage.entries.first(where: { $0.risk == .dangerous && !$0.paths.isEmpty }) ?? model.systemStorage.entries.first {
                 await render(StorageEntryDetailPreview(entry: entry).environment(model).background(.background), size: CGSize(width: 460, height: 560),
-                             to: "\(outputDirectory)/System-Storage-Detail.png")
+                             to: "\(outputDirectory)/Storage-Detail.png")
             }
             if let entry = model.groupedProcessEntries().first(where: { $0.appPath != nil }) {
                 await render(ProcessDetailView(entry: entry).environment(model).background(.background), size: CGSize(width: 440, height: 520),
