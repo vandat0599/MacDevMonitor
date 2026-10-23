@@ -10,7 +10,7 @@ enum SnapshotRunner {
         Task { @MainActor in
             let model = AppModel.shared
             await model.refreshFast(includeProcesses: true)
-            await model.refreshFull()
+            await model.refreshFull(forceSizes: true)
             for _ in 0..<3 {
                 try? await Task.sleep(for: .seconds(1))
                 await model.refreshFast(includeProcesses: false)

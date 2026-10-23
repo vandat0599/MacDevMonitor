@@ -65,7 +65,7 @@ struct MenuBarView: View {
                     NSApp.activate()
                 }
                 .keyboardShortcut("d")
-                Button("Scan Now") { Task { await model.refreshFull() } }
+                Button("Scan Now") { Task { await model.refreshFull(forceSizes: true) } }
                     .disabled(model.isFullScanning)
                 Spacer()
                 Button("Quit") { NSApp.terminate(nil) }

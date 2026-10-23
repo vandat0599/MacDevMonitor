@@ -70,12 +70,8 @@ struct StorageView: View {
 
     private func timeMachine(_ storage: StorageSnapshot) -> some View {
         SectionCard(title: "Time Machine local snapshots",
-                    subtitle: "macOS removes these by itself when space runs low; thinning frees the space now.") {
-            HStack {
-                Text("\(storage.timeMachineSnapshots) snapshot\(storage.timeMachineSnapshots == 1 ? "" : "s")")
-                Spacer()
-                Button("Thin Snapshots…") { model.request(.thinSnapshots) }.disabled(storage.timeMachineSnapshots == 0)
-            }
+                    subtitle: "Shown for awareness only. macOS deletes these by itself when the disk runs low.") {
+            Text("\(storage.timeMachineSnapshots) snapshot\(storage.timeMachineSnapshots == 1 ? "" : "s")")
         }
     }
 }

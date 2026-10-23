@@ -16,13 +16,12 @@ struct MemorySample: Identifiable, Hashable {
 /// Something the user asked for that changes the machine. Every one goes through a confirmation first.
 enum PendingAction: Hashable {
     case fix(FixAction)
-    case terminate(pids: [Int32], label: String)
+    case terminate(targets: [ProcessTarget], label: String)
     case deleteFolders(paths: [String], label: String)
     case removeWorktree(WorktreeRef)
     case deleteSimulator(udid: String, name: String, size: Int64)
     case deleteRuntime(identifier: String, name: String, size: Int64)
     case shutdownSimulators
-    case thinSnapshots
     case fixAllSafe([FixAction])
 }
 
@@ -53,6 +52,7 @@ final class AppModel {
     var includeWorktreeSizes = false
 
     private var loopsStarted = false
+    private var rescanQueued = false
     private var notifiedAt: [String: Date] = [:]
 
     // MARK: Refresh
@@ -94,17 +94,30 @@ final class AppModel {
         reevaluate()
     }
 
-    func refreshFull() async {
-        guard !isFullScanning else { return }
+    /// Background scans reuse folder sizes measured in the last few hours; `forceSizes` re-measures everything.
+    /// A request that arrives mid-scan is queued and runs as soon as the current scan ends.
+    func refreshFull(forceSizes: Bool = false) async {
+        guard !isFullScanning else {
+            rescanQueued = true
+            return
+        }
         isFullScanning = true
-        defer { isFullScanning = false }
+        await scanEverything(forceSizes: forceSizes)
+        while rescanQueued {
+            rescanQueued = false
+            await scanEverything(forceSizes: false)
+        }
+        isFullScanning = false
+    }
+
+    private func scanEverything(forceSizes: Bool) async {
         let roots = settings.repoRoots
         let sizes = includeWorktreeSizes
         async let processes = try? ProcessReader.read(stuckAfter: settings.stuckHours * 3600)
         async let worktrees = WorktreeReader.read(roots: roots, includeSizes: sizes)
-        async let derivedData = DerivedDataReader.read(repoRoots: roots, includeSizes: true)
+        async let derivedData = DerivedDataReader.read(repoRoots: roots, includeSizes: true, sizeMaxAge: forceSizes ? 0 : 2 * 3600)
         async let simulators = try? SimulatorReader.read()
-        async let storage = StorageReader.read(includeSizes: true)
+        async let storage = StorageReader.read(includeSizes: true, sizeMaxAge: forceSizes ? 0 : 6 * 3600)
 
         if let processes = await processes { snapshot.processes = processes }
         snapshot.memory = MemoryReader.read()
@@ -162,10 +175,18 @@ final class AppModel {
         confirmation = describe(action)
     }
 
-    func confirm() {
-        guard let confirmation else { return }
+    /// Runs only the confirmation the user actually saw; a newer request that replaced it is not run.
+    func confirm(_ id: UUID) {
+        guard let confirmation, confirmation.id == id else { return }
         self.confirmation = nil
         Task { await perform(confirmation.action) }
+    }
+
+    /// What to stop for a process row, with the full command so a reused pid can be detected later. Nil for system processes.
+    func target(for pid: Int32) -> ProcessTarget? {
+        guard let row = snapshot.processes?.rows.first(where: { $0.pid == pid }),
+              !ProcessGuard.isProtected(pid: pid, executableName: row.executableName) else { return nil }
+        return ProcessTarget(pid: pid, command: row.command)
     }
 
     private func describe(_ action: PendingAction) -> Confirmation {
@@ -173,20 +194,18 @@ final class AppModel {
         switch action {
         case .fix(let fix):
             return describe(fix)
-        case .terminate(let pids, let label):
-            return Confirmation(title: "Stop \(label)?", message: "Sends a quit signal to PID \(pids.map(String.init).joined(separator: ", ")), then force-quits anything still running after 3 seconds. Unsaved work in those processes is lost.", confirmLabel: "Stop", destructive: true, action: action)
+        case .terminate(let targets, let label):
+            return Confirmation(title: "Stop \(label)?", message: "Sends a quit signal, then force-quits anything still running after 3 seconds. Unsaved work in these processes is lost.\n\n" + Self.describe(targets), confirmLabel: "Stop", destructive: true, action: action)
         case .deleteFolders(let paths, let label):
             return Confirmation(title: "Delete \(label)?", message: "\(paths.count) folder\(paths.count == 1 ? "" : "s") will be \(trash ? "moved to the Trash" : "permanently deleted"). Xcode recreates build data on the next build, which then starts from scratch.\n\n" + paths.map { ($0 as NSString).abbreviatingWithTildeInPath }.joined(separator: "\n"), confirmLabel: trash ? "Move to Trash" : "Delete", destructive: true, action: action)
         case .removeWorktree(let ref):
-            return Confirmation(title: "Remove worktree \((ref.path as NSString).lastPathComponent)?", message: "Runs `git worktree remove`, which deletes the folder but keeps the branch. Git refuses if anything is uncommitted.", confirmLabel: "Remove", destructive: true, action: action)
+            return Confirmation(title: "Remove worktree \((ref.path as NSString).lastPathComponent)?", message: "Runs `git worktree remove`, which deletes the folder but keeps the branch. It's re-checked first for uncommitted changes, unpushed commits and running processes.\n\nGit-ignored files inside it (build output, .env, local.properties) are deleted too.", confirmLabel: "Remove", destructive: true, action: action)
         case .deleteSimulator(_, let name, let size):
             return Confirmation(title: "Delete simulator \(name)?", message: "Deletes the device and its data (\(ByteSize.format(size))). Installed apps and their data on it are lost.", confirmLabel: "Delete", destructive: true, action: action)
         case .deleteRuntime(_, let name, let size):
             return Confirmation(title: "Delete runtime \(name)?", message: "Frees about \(ByteSize.format(size)). Simulators that use it stop working until you download it again in Xcode.", confirmLabel: "Delete", destructive: true, action: action)
         case .shutdownSimulators:
             return Confirmation(title: "Shut down all simulators?", message: "Any app running in a simulator is stopped.", confirmLabel: "Shut Down", destructive: false, action: action)
-        case .thinSnapshots:
-            return Confirmation(title: "Thin Time Machine local snapshots?", message: "Asks Time Machine to remove local snapshots it doesn't need. Backups on your backup disk aren't touched.", confirmLabel: "Thin", destructive: false, action: action)
         case .fixAllSafe(let fixes):
             let lines = fixes.map { "• " + Self.summary(of: $0) }.joined(separator: "\n")
             return Confirmation(title: "Fix \(fixes.count) safe issue\(fixes.count == 1 ? "" : "s")?", message: "These only touch leftovers, never work in progress:\n\n" + lines, confirmLabel: "Fix All", destructive: true, action: action)
@@ -208,7 +227,7 @@ final class AppModel {
         switch fix {
         case .restartFseventsd: "Restart fseventsd"
         case .restartMac: "Restart the Mac"
-        case .terminate(let pids): "Stop \(pids.count) leftover process\(pids.count == 1 ? "" : "es")"
+        case .terminate(let targets): "Stop \(targets.count) leftover process\(targets.count == 1 ? "" : "es")"
         case .cleanWorktrees(let prune, let unlock): "Prune stale worktrees in \(Set(prune + unlock.map(\.repo)).count) repo\(Set(prune + unlock.map(\.repo)).count == 1 ? "" : "s")"
         case .deleteDerivedData(let paths): "Delete \(paths.count) build folder\(paths.count == 1 ? "" : "s")"
         case .deleteUnavailableSimulators: "Delete unusable simulators"
@@ -217,12 +236,17 @@ final class AppModel {
 
     private static func detail(of fix: FixAction) -> String {
         switch fix {
-        case .terminate(let pids): "Stops PID \(pids.map(String.init).joined(separator: ", ")). Force-quits any still running after 3 seconds."
+        case .terminate(let targets): "Force-quits any still running after 3 seconds.\n\n" + describe(targets)
         case .cleanWorktrees(_, let unlock): "Removes git's records of worktrees whose folders are gone\(unlock.isEmpty ? "" : ", unlocking \(unlock.count) left locked by sessions that have ended"). Branches stay."
         case .deleteDerivedData(let paths): "Deletes:\n" + paths.map { ($0 as NSString).abbreviatingWithTildeInPath }.joined(separator: "\n")
         case .deleteUnavailableSimulators: "Runs `xcrun simctl delete unavailable`."
         default: ""
         }
+    }
+
+    private static func describe(_ targets: [ProcessTarget]) -> String {
+        targets.prefix(8).map { "PID \($0.pid): \($0.command.count > 90 ? String($0.command.prefix(90)) + "…" : $0.command)" }
+            .joined(separator: "\n") + (targets.count > 8 ? "\n…and \(targets.count - 8) more" : "")
     }
 
     func perform(_ action: PendingAction) async {
@@ -231,8 +255,8 @@ final class AppModel {
             await run(Self.summary(of: fix)) { await self.execute(fix) }
         case .fixAllSafe(let fixes):
             for fix in fixes { await run(Self.summary(of: fix)) { await self.execute(fix) } }
-        case .terminate(let pids, let label):
-            await run("Stopping \(label)") { await Actions.terminate(pids: pids) }
+        case .terminate(let targets, let label):
+            await run("Stopping \(label)") { await Actions.terminate(targets) }
         case .deleteFolders(let paths, let label):
             let trash = settings.moveToTrash
             await run("Deleting \(label)") { await Actions.deleteFolders(paths, moveToTrash: trash) }
@@ -244,8 +268,6 @@ final class AppModel {
             await run("Deleting runtime") { await Actions.deleteRuntime(identifier: identifier, freeing: size) }
         case .shutdownSimulators:
             await run("Shutting down simulators") { await Actions.shutdownAllSimulators() }
-        case .thinSnapshots:
-            await run("Thinning snapshots") { await Actions.thinLocalSnapshots() }
         }
         await refreshFast(includeProcesses: true)
         await refreshFull()
@@ -255,9 +277,15 @@ final class AppModel {
         switch fix {
         case .restartFseventsd: return await Actions.restartFseventsd()
         case .restartMac: return await Actions.restartMac()
-        case .terminate(let pids): return await Actions.terminate(pids: pids)
+        case .terminate(let targets): return await Actions.terminate(targets)
         case .cleanWorktrees(let prune, let unlock): return await Actions.cleanWorktrees(prune: prune, unlock: unlock)
-        case .deleteDerivedData(let paths): return await Actions.deleteFolders(paths, moveToTrash: settings.moveToTrash)
+        case .deleteDerivedData(let paths):
+            // One-click fixes come from a scan that may be 30 minutes old; keep only folders that are still orphaned or idle.
+            let current = await DerivedDataReader.read(repoRoots: settings.repoRoots, includeSizes: false)
+            let stillStale = Set(current.filter { $0.status.isOrphan || ($0.lastUsed.map { Date().timeIntervalSince($0) > 86_400 } ?? false) }.map(\.path))
+            let paths = paths.filter(stillStale.contains)
+            guard !paths.isEmpty else { return ActionOutcome(succeeded: true, summary: "Nothing to delete: those folders were used since the scan") }
+            return await Actions.deleteFolders(paths, moveToTrash: settings.moveToTrash)
         case .deleteUnavailableSimulators:
             let size = snapshot.simulators?.unavailable.reduce(0) { $0 + $1.dataSize }
             return await Actions.deleteUnavailableSimulators(freeing: size)

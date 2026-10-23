@@ -22,7 +22,7 @@ struct ProcessesView: View {
                             TableColumn("Running") { s in Text(ElapsedTime.format(s.row.elapsed)).monospacedDigit() }.width(80)
                             TableColumn("Command") { s in Text(s.row.command).lineLimit(1).truncationMode(.middle).help(s.row.command) }
                             TableColumn("") { s in
-                                Button("Stop…") { model.request(.terminate(pids: [s.row.pid], label: s.rule)) }.controlSize(.small)
+                                Button("Stop…") { model.request(.terminate(targets: [ProcessTarget(pid: s.row.pid, command: s.row.command)], label: s.rule)) }.controlSize(.small)
                             }
                             .width(70)
                         }
@@ -30,7 +30,7 @@ struct ProcessesView: View {
                         HStack {
                             Spacer()
                             Button("Stop All \(stuck.count)…") {
-                                model.request(.terminate(pids: stuck.map(\.row.pid), label: "\(stuck.count) leftover processes"))
+                                model.request(.terminate(targets: stuck.map { ProcessTarget(pid: $0.row.pid, command: $0.row.command) }, label: "\(stuck.count) leftover processes"))
                             }
                         }
                     }
@@ -73,7 +73,7 @@ struct ProcessesView: View {
                     Spacer()
                     Text(formatBytes(daemon.footprint)).monospacedDigit().frame(width: 80, alignment: .trailing)
                     Text(ElapsedTime.format(daemon.row.elapsed)).monospacedDigit().foregroundStyle(.secondary).frame(width: 70, alignment: .trailing)
-                    Button("Stop…") { model.request(.terminate(pids: [daemon.row.pid], label: kind.rawValue)) }.controlSize(.small)
+                    Button("Stop…") { model.request(.terminate(targets: [ProcessTarget(pid: daemon.row.pid, command: daemon.row.command)], label: kind.rawValue)) }.controlSize(.small)
                 }
                 .font(.callout)
             }

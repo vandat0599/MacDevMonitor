@@ -22,7 +22,7 @@ struct RootView: View {
         .toolbar {
             ToolbarItem {
                 Button {
-                    Task { await model.refreshFull() }
+                    Task { await model.refreshFull(forceSizes: true) }
                 } label: {
                     Label("Scan Now", systemImage: "arrow.clockwise")
                 }
@@ -34,7 +34,7 @@ struct RootView: View {
             get: { model.confirmation != nil },
             set: { if !$0 { model.confirmation = nil } }
         ), presenting: model.confirmation) { confirmation in
-            Button(confirmation.confirmLabel, role: confirmation.destructive ? .destructive : nil) { model.confirm() }
+            Button(confirmation.confirmLabel, role: confirmation.destructive ? .destructive : nil) { model.confirm(confirmation.id) }
             Button("Cancel", role: .cancel) { model.confirmation = nil }
         } message: { confirmation in
             Text(confirmation.message)

@@ -39,8 +39,8 @@ struct MemoryView: View {
                         TableColumn("") { p in
                             if p.command == "fseventsd" {
                                 Button("Restart…") { model.request(.fix(.restartFseventsd)) }.controlSize(.small)
-                            } else {
-                                Button("Quit…") { model.request(.terminate(pids: [p.pid], label: p.command)) }.controlSize(.small)
+                            } else if let target = model.target(for: p.pid) {
+                                Button("Quit…") { model.request(.terminate(targets: [target], label: p.command)) }.controlSize(.small)
                             }
                         }
                         .width(80)

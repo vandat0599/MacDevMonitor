@@ -36,10 +36,10 @@ public enum WorktreeReader {
         var info = WorktreeInfo(entry: entry, exists: exists, lockPIDAlive: entry.lockPID.map(isAlive))
         guard exists, !entry.isMain else { return info }
 
-        if let status = try? await Shell.check("/usr/bin/git", ["-C", entry.path, "status", "--porcelain"], timeout: 30) {
+        if let status = try? await Shell.check("/usr/bin/git", ["--no-optional-locks", "-C", entry.path, "status", "--porcelain"], timeout: 30) {
             info.dirtyFiles = status.split(separator: "\n").count
         }
-        if let count = try? await Shell.check("/usr/bin/git", ["-C", entry.path, "rev-list", "--count", "HEAD", "--not", "--remotes"], timeout: 30) {
+        if let count = try? await Shell.check("/usr/bin/git", ["--no-optional-locks", "-C", entry.path, "rev-list", "--count", "HEAD", "--not", "--remotes"], timeout: 30) {
             info.unpushedCommits = Int(count.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         if includeSize { info.size = await SizeReader.size(of: entry.path) }

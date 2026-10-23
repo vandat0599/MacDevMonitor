@@ -10,7 +10,8 @@ public enum StuckRules {
         let name = executable.lastPathComponent
         let arguments = command.split(separator: " ").dropFirst()
         if name == "tail", arguments.contains("-f") || arguments.contains("-F") { return "tail -f" }
-        if name == "xcodebuild" || name == "XCBBuildService" { return "xcodebuild" }
+        // Only the CLI: Xcode's build service (XCB/SWBBuildService) lives as long as Xcode is open.
+        if name == "xcodebuild" { return "xcodebuild" }
         if name == "simctl" { return "simctl" }
         if name == "lldb" || name == "lldb-rpc-server" { return "lldb" }
         return nil

@@ -146,7 +146,8 @@ public struct WorktreeInfo: Sendable, Hashable, Identifiable {
     }
 
     public var isStale: Bool { !entry.isMain && (!exists || entry.isPrunable) }
-    public var hasDeadLock: Bool { entry.isLocked && lockPIDAlive != true }
+    /// Only locks that name a pid that has exited; manual locks (no pid) are deliberate and never undone.
+    public var hasDeadLock: Bool { entry.isLocked && entry.lockPID != nil && lockPIDAlive == false }
     public var isSafeToRemove: Bool {
         !entry.isMain && exists && !entry.isLocked && usedByPIDs.isEmpty && dirtyFiles == 0 && unpushedCommits == 0
     }

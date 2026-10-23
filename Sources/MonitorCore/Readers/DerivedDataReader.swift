@@ -10,7 +10,7 @@ public enum DerivedDataReader {
     }
 
     /// Xcode's default DerivedData, build folders Claude sessions put in /tmp, and any `DerivedData` folder inside a repo.
-    public static func read(repoRoots: [String], includeSizes: Bool) async -> [DerivedDataEntry] {
+    public static func read(repoRoots: [String], includeSizes: Bool, sizeMaxAge: TimeInterval = 0) async -> [DerivedDataEntry] {
         var entries: [DerivedDataEntry] = []
         let fm = FileManager.default
 
@@ -41,7 +41,7 @@ public enum DerivedDataReader {
         }
 
         if includeSizes {
-            let sizes = await SizeReader.sizes(of: entries.map(\.path))
+            let sizes = await SizeReader.sizes(of: entries.map(\.path), maxAge: sizeMaxAge)
             for index in entries.indices { entries[index].size = sizes[entries[index].path] }
         }
         return entries.sorted { ($0.size ?? 0) > ($1.size ?? 0) }

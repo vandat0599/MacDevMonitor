@@ -26,7 +26,7 @@ This builds a release binary, wraps it in `Mac Dev Monitor.app` with an icon, si
 | Worktrees | Every worktree under your repo folders: stale, locked by a dead session, in use by a process, uncommitted, unpushed | Prune / unlock stale entries, `git worktree remove` clean unused ones |
 | Build Data | DerivedData in Xcode's folder, `/tmp` and inside repos: in use, orphaned, shared caches | Delete one, several, or all orphans |
 | Simulators | Devices with data size, unusable ones, runtimes | Delete devices, unusable ones, unused runtimes; shut down all |
-| Storage | Disk, iOS DeviceSupport, Claude temp folders, other caches, Time Machine local snapshots | Delete DeviceSupport / idle Claude temp folders, thin snapshots |
+| Storage | Disk, iOS DeviceSupport, Claude temp folders, other caches, Time Machine local snapshot count | Delete DeviceSupport / idle Claude temp folders |
 | Activity | Everything the app changed, with space freed | — |
 
 The menu bar shows free memory and the worst issue; its panel has the key numbers and quick fixes.
@@ -43,6 +43,10 @@ Warnings and critical issues also arrive as notifications (at most once per issu
 - A DerivedData folder without project info is only called an orphan after a day untouched; it may be mid-build.
 - One-click fixes for build folders outside Xcode's default location only cover ones idle for a day.
 - Archives, `~/Library/Caches`, Gradle, Android emulators and npm are shown but never deleted.
+- Every action re-checks the machine right before it acts: a stopped process must still run the same command
+  (so a reused PID is never hit), and system processes (kernel_task, launchd, loginwindow, WindowServer, …) are never signalled.
+  Folders a process is working in are skipped, as are Claude session scratch folders used in the last day.
+- Manual `git worktree lock`s (no PID in the reason) are never undone; git status runs with `--no-optional-locks`.
 - Restarting fseventsd uses the standard macOS administrator prompt; restarting the Mac uses the system dialog.
 
 ## Develop

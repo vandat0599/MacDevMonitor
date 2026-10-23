@@ -12,7 +12,9 @@ public struct DeletionPolicy: Sendable {
 
     public func isAllowed(_ path: String) -> Bool {
         guard path.hasPrefix("/"), !path.split(separator: "/").contains("..") else { return false }
-        let standardized = (path as NSString).standardizingPath
+        // standardizingPath turns an existing /private/tmp/x into /tmp/x, so compare both sides in that form.
+        let standardized = Self.tmpForm((path as NSString).standardizingPath)
+        let claudeTemp = Self.tmpForm(claudeTemp)
         let derivedDataRoot = home + "/Library/Developer/Xcode/DerivedData"
         let deviceSupportRoot = home + "/Library/Developer/Xcode/iOS DeviceSupport"
 
@@ -26,6 +28,12 @@ public struct DeletionPolicy: Sendable {
             return true
         }
         return false
+    }
+
+    static func tmpForm(_ path: String) -> String {
+        if path == "/private/tmp" { return "/tmp" }
+        if path.hasPrefix("/private/tmp/") { return String(path.dropFirst("/private".count)) }
+        return path
     }
 
     private func isDirectChild(_ path: String, of parent: String) -> Bool {

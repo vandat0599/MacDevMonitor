@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public enum CwdParser {
@@ -25,7 +26,16 @@ public enum CwdParser {
         return entries
     }
 
+    /// lsof reports resolved paths (/private/tmp/…) while git keeps what it was given (/tmp/…), so match both.
+    /// realpath(3) keeps /private/tmp; Foundation's resolvingSymlinksInPath strips /private again.
+    public static func realPath(_ path: String) -> String {
+        guard let resolved = Darwin.realpath(path, nil) else { return path }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
     public static func pids(in folder: String, from entries: [Entry]) -> [Int32] {
-        entries.filter { $0.path == folder || $0.path.hasPrefix(folder + "/") }.map(\.pid)
+        let forms = Set([folder, realPath(folder)])
+        return entries.filter { entry in forms.contains { entry.path == $0 || entry.path.hasPrefix($0 + "/") } }.map(\.pid)
     }
 }

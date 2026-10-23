@@ -13,7 +13,7 @@ public enum SimulatorReader {
 }
 
 public enum StorageReader {
-    public static func read(includeSizes: Bool) async -> StorageSnapshot {
+    public static func read(includeSizes: Bool, sizeMaxAge: TimeInterval = 0) async -> StorageSnapshot {
         let home = NSHomeDirectory()
         var items: [StorageItem] = []
         let fm = FileManager.default
@@ -44,7 +44,7 @@ public enum StorageReader {
         }
 
         if includeSizes {
-            let sizes = await SizeReader.sizes(of: items.map(\.path))
+            let sizes = await SizeReader.sizes(of: items.map(\.path), maxAge: sizeMaxAge)
             for index in items.indices { items[index].size = sizes[items[index].path] }
         }
 

@@ -42,7 +42,7 @@ public enum Severity: Int, Sendable, Comparable {
 public enum FixAction: Sendable, Hashable {
     case restartFseventsd
     case restartMac
-    case terminate(pids: [Int32])
+    case terminate(targets: [ProcessTarget])
     case cleanWorktrees(prune: [String], unlock: [WorktreeRef])
     case deleteDerivedData(paths: [String])
     case deleteUnavailableSimulators
@@ -125,7 +125,7 @@ public enum HealthEvaluator {
                 id: "stuck", severity: .warning,
                 title: "\(p.stuck.count) leftover dev process\(p.stuck.count == 1 ? "" : "es") running for over a day",
                 detail: kinds,
-                fix: .terminate(pids: p.stuck.map(\.row.pid)), fixLabel: "Stop them"))
+                fix: .terminate(targets: p.stuck.map { ProcessTarget(pid: $0.row.pid, command: $0.row.command) }), fixLabel: "Stop them"))
         }
         if !p.zombies.isEmpty {
             issues.append(HealthIssue(

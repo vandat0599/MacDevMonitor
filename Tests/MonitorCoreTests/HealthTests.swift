@@ -110,7 +110,7 @@ private let day: TimeInterval = 86_400
         var snapshot = MachineSnapshot()
         snapshot.processes = processes(fsevents: 3 * mib, stuck: [StuckProcess(row: row, rule: "Crashlytics upload", footprint: nil)], zombies: 9)
         let issues = HealthEvaluator.evaluate(snapshot, thresholds: .default, now: now)
-        #expect(issues.first { $0.id == "stuck" }?.fix == .terminate(pids: [3505]))
+        #expect(issues.first { $0.id == "stuck" }?.fix == .terminate(targets: [ProcessTarget(pid: 3505, command: "upload-symbols")]))
         #expect(issues.first { $0.id == "zombies" }?.severity == .info)
     }
 
