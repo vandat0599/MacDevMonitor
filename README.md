@@ -1,0 +1,56 @@
+# Mac Dev Monitor
+
+A menu-bar app and dashboard for watching and cleaning up the things that eat a dev Mac's RAM and disk:
+bloated system daemons, swap, leftover build processes, stale git worktrees, Xcode DerivedData,
+simulators and dev caches.
+
+It exists because "Claude/Xcode keeps running out of memory" turned out to be `fseventsd` at 37 GB
+after 106 days of uptime, plus a pile of build leftovers that only a manual terminal session found.
+
+## Install
+
+```bash
+bash scripts/bundle.sh
+```
+
+This builds a release binary, wraps it in `Mac Dev Monitor.app` with an icon, signs it ad hoc and copies it to
+`~/Applications`. Open it from there. Use `--no-install` to only build `dist/Mac Dev Monitor.app`.
+
+## What it watches
+
+| Page | Shows | Can do (always after a confirmation) |
+|---|---|---|
+| Overview | Health cards, every issue with its fix, recent activity | Fix one issue, or "Fix All Safe Issues" (leftovers only) |
+| Memory | Free %, pressure, swap, compressed, 3-hour charts, biggest processes by real footprint | Quit a process, restart fseventsd (admin prompt) |
+| Processes | Dev leftovers older than a day (Crashlytics uploads, `tail -f`, simctl, xcodebuild, lldb), running dev tools, zombies | Stop them, restart the Mac |
+| Worktrees | Every worktree under your repo folders: stale, locked by a dead session, in use by a process, uncommitted, unpushed | Prune / unlock stale entries, `git worktree remove` clean unused ones |
+| Build Data | DerivedData in Xcode's folder, `/tmp` and inside repos: in use, orphaned, shared caches | Delete one, several, or all orphans |
+| Simulators | Devices with data size, unusable ones, runtimes | Delete devices, unusable ones, unused runtimes; shut down all |
+| Storage | Disk, iOS DeviceSupport, Claude temp folders, other caches, Time Machine local snapshots | Delete DeviceSupport / idle Claude temp folders, thin snapshots |
+| Activity | Everything the app changed, with space freed | — |
+
+The menu bar shows free memory and the worst issue; its panel has the key numbers and quick fixes.
+Warnings and critical issues also arrive as notifications (at most once per issue every 6 hours).
+
+## Safety rules
+
+- Nothing changes without a confirmation that says exactly what will happen.
+- Deletion is limited by `DeletionPolicy` to build data and caches tools recreate: direct children of
+  DerivedData and iOS DeviceSupport, folders named `DerivedData` in your home folder, and `/private/tmp/claude-<uid>/…`.
+  Deletes are refused while an `xcodebuild` is running.
+- Worktrees are removed only through `git worktree remove` (never forced), and only when clean, fully pushed,
+  unlocked, and no process is working inside them.
+- A DerivedData folder without project info is only called an orphan after a day untouched; it may be mid-build.
+- One-click fixes for build folders outside Xcode's default location only cover ones idle for a day.
+- Archives, `~/Library/Caches`, Gradle, Android emulators and npm are shown but never deleted.
+- Restarting fseventsd uses the standard macOS administrator prompt; restarting the Mac uses the system dialog.
+
+## Develop
+
+```bash
+swift test                                   # parsers, rules, health evaluation, deletion policy, live readers
+swift build && .build/debug/MacDevMonitor --snapshot /tmp/snaps   # PNG of every page from live data
+```
+
+`MonitorCore` holds parsing, readers, rules and actions (no UI); `MacDevMonitor` is the SwiftUI app.
+Thresholds, refresh intervals, repo folders, notifications, Trash-vs-delete and open-at-login are in Settings.

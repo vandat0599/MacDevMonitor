@@ -1,0 +1,34 @@
+import Foundation
+
+/// The only folders the app will ever delete: build data and caches that tools recreate on demand.
+public struct DeletionPolicy: Sendable {
+    public var home: String
+    public var claudeTemp: String
+
+    public init(home: String = NSHomeDirectory(), claudeTemp: String = DerivedDataReader.claudeTempRoot) {
+        self.home = home
+        self.claudeTemp = claudeTemp
+    }
+
+    public func isAllowed(_ path: String) -> Bool {
+        guard path.hasPrefix("/"), !path.split(separator: "/").contains("..") else { return false }
+        let standardized = (path as NSString).standardizingPath
+        let derivedDataRoot = home + "/Library/Developer/Xcode/DerivedData"
+        let deviceSupportRoot = home + "/Library/Developer/Xcode/iOS DeviceSupport"
+
+        if isDirectChild(standardized, of: derivedDataRoot) { return true }
+        if isDirectChild(standardized, of: deviceSupportRoot) { return true }
+        if standardized.hasPrefix(claudeTemp + "/") { return true }
+        if (standardized as NSString).lastPathComponent == "DerivedData",
+           standardized.hasPrefix(home + "/"),
+           standardized != derivedDataRoot,
+           !standardized.hasPrefix(home + "/Library/") {
+            return true
+        }
+        return false
+    }
+
+    private func isDirectChild(_ path: String, of parent: String) -> Bool {
+        (path as NSString).deletingLastPathComponent == parent && path != parent
+    }
+}
