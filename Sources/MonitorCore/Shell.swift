@@ -33,7 +33,8 @@ public enum Shell {
     }
 
     /// Runs an executable off the main thread, draining both pipes so large outputs can't deadlock it.
-    /// On timeout it sends SIGTERM, then SIGKILL, and gives up waiting after that, so a hung command never blocks a scan.
+    /// Completion comes from `terminationHandler`, not `waitUntilExit()`, which can miss the exit when many processes run at once.
+    /// On timeout it sends SIGTERM, then SIGKILL, and always gives up waiting after that, so a hung command never blocks a scan.
     public static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval = 120,
                            environment: [String: String]? = nil) async throws -> Result {
         try await withCheckedThrowingContinuation { continuation in
@@ -47,39 +48,41 @@ public enum Shell {
             let errPipe = Pipe()
             process.standardOutput = outPipe
             process.standardError = errPipe
+
+            let outBox = Box()
+            let errBox = Box()
+            let group = DispatchGroup()
+            group.enter()
+            process.terminationHandler = { _ in group.leave() }
             do {
                 try process.run()
             } catch {
                 continuation.resume(throwing: Failure(message: "Couldn't start \(executable): \(error.localizedDescription)"))
                 return
             }
-
-            DispatchQueue.global(qos: .utility).async {
-                let errBox = Box()
-                let group = DispatchGroup()
+            for (pipe, box) in [(outPipe, outBox), (errPipe, errBox)] {
                 group.enter()
                 DispatchQueue.global(qos: .utility).async {
-                    errBox.data = errPipe.fileHandleForReading.readDataToEndOfFile()
+                    box.data = pipe.fileHandleForReading.readDataToEndOfFile()
                     group.leave()
                 }
-                let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                group.wait()
-                process.waitUntilExit()
+            }
+            group.notify(queue: .global(qos: .utility)) {
                 once.run {
                     continuation.resume(returning: Result(
                         status: process.terminationStatus,
-                        output: String(decoding: outData, as: UTF8.self),
+                        output: String(decoding: outBox.data, as: UTF8.self),
                         error: String(decoding: errBox.data, as: UTF8.self)))
                 }
             }
 
             let pid = process.processIdentifier
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                guard process.isRunning else { return }
-                process.terminate()
+                if process.isRunning { process.terminate() }
                 DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
                     if process.isRunning { kill(pid, SIGKILL) }
                     DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                        // Unconditional: even if the process looks finished, a stuck pipe or missed exit must not hang the caller.
                         once.run {
                             continuation.resume(throwing: Failure(message: "\((executable as NSString).lastPathComponent) timed out after \(Int(timeout)) s"))
                         }

@@ -24,6 +24,8 @@ public struct MemoryStatus: Sendable, Hashable {
     /// Bytes of RAM occupied by the compressor.
     public var compressed: Int64
     public var bootTime: Date
+    /// App / wired / compressed / cached / free, when the kernel counters could be read.
+    public var composition: MemoryComposition?
 
     public init(physical: Int64, freePercent: Int, pressure: PressureLevel, swapTotal: Int64,
                 swapUsed: Int64, compressed: Int64, bootTime: Date) {

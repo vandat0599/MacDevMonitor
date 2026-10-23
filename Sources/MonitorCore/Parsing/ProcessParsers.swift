@@ -22,6 +22,10 @@ public struct PSRow: Sendable, Hashable, Identifiable {
     public var elapsed: TimeInterval
     public var stat: String
     public var command: String
+    /// The owner's user ID, when the reader looked it up.
+    public var uid: UInt32?
+    /// The executable's full path from `ps -o comm`, which keeps spaces ("Application Support") that splitting the command line breaks.
+    public var executablePath: String?
     public var id: Int32 { pid }
 
     public init(pid: Int32, ppid: Int32, elapsed: TimeInterval, stat: String, command: String) {
@@ -35,6 +39,7 @@ public struct PSRow: Sendable, Hashable, Identifiable {
     public var isZombie: Bool { stat.hasPrefix("Z") }
 
     public var executableName: String {
+        if let executablePath, !executablePath.isEmpty { return (executablePath as NSString).lastPathComponent }
         let first = command.split(separator: " ", maxSplits: 1).first.map(String.init) ?? command
         return (first as NSString).lastPathComponent
     }

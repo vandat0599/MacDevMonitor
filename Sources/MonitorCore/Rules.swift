@@ -13,7 +13,6 @@ public enum StuckRules {
         // Only the CLI: Xcode's build service (XCB/SWBBuildService) lives as long as Xcode is open.
         if name == "xcodebuild" { return "xcodebuild" }
         if name == "simctl" { return "simctl" }
-        if name == "lldb" || name == "lldb-rpc-server" { return "lldb" }
         return nil
     }
 }

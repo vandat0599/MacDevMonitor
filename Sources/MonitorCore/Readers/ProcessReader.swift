@@ -5,7 +5,18 @@ public enum ProcessReader {
     public static func read(stuckAfter: TimeInterval) async throws -> ProcessSnapshot {
         async let topOutput = Shell.check("/usr/bin/top", ["-l", "1", "-o", "mem", "-n", "2000", "-stats", "pid,command,mem,cmprs"], timeout: 30)
         async let psOutput = Shell.check("/bin/ps", ["-axo", "pid=,ppid=,etime=,stat=,command="], timeout: 30)
-        let rows = PSParser.parse(try await psOutput)
+        async let ownerOutput = Shell.run("/bin/ps", ["-axo", "pid=,uid=,comm="], timeout: 30)
+        var rows = PSParser.parse(try await psOutput)
+        var owners: [Int32: (uid: UInt32, path: String)] = [:]
+        for line in ((try? await ownerOutput)?.output ?? "").split(separator: "\n") {
+            let (fields, rest) = PSParser.leadingFields(line, count: 2)
+            guard fields.count == 2, let pid = Int32(fields[0]), let uid = UInt32(fields[1]) else { continue }
+            owners[pid] = (uid, String(rest))
+        }
+        for index in rows.indices {
+            rows[index].uid = owners[rows[index].pid]?.uid
+            rows[index].executablePath = owners[rows[index].pid]?.path
+        }
         let byPID = Dictionary(rows.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
 
         var memory = TopParser.parse(try await topOutput)

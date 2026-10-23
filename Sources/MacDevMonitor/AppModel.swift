@@ -23,6 +23,8 @@ enum PendingAction: Hashable {
     case deleteRuntime(identifier: String, name: String, size: Int64)
     case shutdownSimulators
     case fixAllSafe([FixAction])
+    /// Several rows ticked on the Memory page: apps quit the normal way, other processes are stopped.
+    case quitSelection(apps: [AppQuitTarget], processes: [ProcessTarget], detail: String)
     /// Any Deep Clean action run from a page, with the confirmation text the page wrote.
     case cleanup(CleanupAction, title: String, detail: String, confirmLabel: String)
 }
@@ -43,6 +45,10 @@ final class AppModel {
     let settings = AppSettings()
     let deepClean = DeepCleanModel()
     let permissions = PermissionsModel()
+    let memoryScan = MemoryScanModel()
+    private var growthTracker = GrowthTracker(window: 600)
+    /// Bytes each process grew over the last ten minutes.
+    private(set) var growth: [Int32: Int64] = [:]
     var selectedSection: DashboardSection = .overview
     private(set) var snapshot = MachineSnapshot()
     private(set) var issues: [HealthIssue] = []
@@ -94,6 +100,8 @@ final class AppModel {
         snapshot.disk = DiskReader.read()
         if includeProcesses, let processes = try? await ProcessReader.read(stuckAfter: settings.stuckHours * 3600) {
             snapshot.processes = processes
+            growthTracker.record(Dictionary(processes.memory.map { ($0.pid, $0.footprint) }, uniquingKeysWith: { first, _ in first }))
+            growth = growthTracker.allGrowth
         }
         lastFastRefresh = Date()
         recordSample()
@@ -236,7 +244,7 @@ final class AppModel {
         case .fix(let fix):
             return describe(fix)
         case .terminate(let targets, let label):
-            return Confirmation(title: "Stop \(label)?", message: "Sends a quit signal, then force-quits anything still running after 3 seconds. Unsaved work in these processes is lost.\n\n" + Self.describe(targets), confirmLabel: "Stop", destructive: true, action: action)
+            return Confirmation(title: "Stop \(label)?", message: "Apps are asked to quit normally and can save first. Other processes get a quit signal and are force-quit if still running after 3 seconds; their unsaved work is lost.\n\n" + Self.describe(targets), confirmLabel: "Stop", destructive: true, action: action)
         case .deleteFolders(let paths, let label):
             return Confirmation(title: "Delete \(label)?", message: "\(paths.count) folder\(paths.count == 1 ? "" : "s") will be \(trash ? "moved to the Trash" : "permanently deleted"). Xcode recreates build data on the next build, which then starts from scratch.\n\n" + paths.map { ($0 as NSString).abbreviatingWithTildeInPath }.joined(separator: "\n"), confirmLabel: trash ? "Move to Trash" : "Delete", destructive: true, action: action)
         case .removeWorktree(let ref):
@@ -247,6 +255,9 @@ final class AppModel {
             return Confirmation(title: "Delete runtime \(name)?", message: "Frees about \(ByteSize.format(size)). Simulators that use it stop working until you download it again in Xcode.", confirmLabel: "Delete", destructive: true, action: action)
         case .shutdownSimulators:
             return Confirmation(title: "Shut down all simulators?", message: "Any app running in a simulator is stopped.", confirmLabel: "Shut Down", destructive: false, action: action)
+        case .quitSelection(let apps, let processes, let detail):
+            let count = apps.count + processes.count
+            return Confirmation(title: "Quit \(count) selected?", message: detail, confirmLabel: "Quit \(count)", destructive: true, action: action)
         case .cleanup(_, let title, let detail, let confirmLabel):
             return Confirmation(title: title, message: detail, confirmLabel: confirmLabel, destructive: true, action: action)
         case .fixAllSafe(let fixes):
@@ -299,7 +310,14 @@ final class AppModel {
         case .fixAllSafe(let fixes):
             for fix in fixes { await run(Self.summary(of: fix)) { await self.execute(fix) } }
         case .terminate(let targets, let label):
-            await run("Stopping \(label)") { await Actions.terminate(targets) }
+            await run("Stopping \(label)") { await self.quitProcesses(targets) }
+        case .quitSelection(let apps, let processes, _):
+            await run("Quitting \(apps.count + processes.count) selected") {
+                var outcomes: [ActionOutcome] = []
+                if !apps.isEmpty { outcomes.append(await self.quitApps(apps)) }
+                if !processes.isEmpty { outcomes.append(await self.quitProcesses(processes)) }
+                return Self.combine(outcomes, summary: outcomes.map(\.summary).joined(separator: " · "))
+            }
         case .deleteFolders(let paths, let label):
             let trash = settings.moveToTrash
             await run("Deleting \(label)") { await Actions.deleteFolders(paths, moveToTrash: trash) }
@@ -346,7 +364,8 @@ final class AppModel {
     func executeCleanup(_ action: CleanupAction, sizeHint: Int64?) async -> ActionOutcome {
         let trash = settings.moveToTrash
         switch action {
-        case .terminate(let targets): return await Actions.terminate(targets)
+        case .terminate(let targets): return await quitProcesses(targets)
+        case .quitApps(let targets): return await quitApps(targets)
         case .shutdownSimulators(let udids): return await Actions.shutdownSimulators(udids)
         case .cleanWorktrees(let prune, let unlock): return await Actions.cleanWorktrees(prune: prune, unlock: unlock)
         case .removeWorktrees(let refs):
@@ -383,6 +402,48 @@ final class AppModel {
             for request in requests { outcomes.append(await uninstall(request)) }
             return Self.combine(outcomes, summary: "Uninstalled \(outcomes.filter(\.succeeded).count) of \(requests.count) apps")
         }
+    }
+
+    /// Real apps among the targets are asked to quit the normal way; everything else gets the checked SIGTERM/SIGKILL stop.
+    func quitProcesses(_ targets: [ProcessTarget]) async -> ActionOutcome {
+        var apps: [AppQuitTarget] = []
+        var others: [ProcessTarget] = []
+        for target in targets {
+            if let app = NSRunningApplication(processIdentifier: target.pid), app.activationPolicy == .regular,
+               let path = app.bundleURL?.path, target.command.hasPrefix(path + "/Contents/MacOS/") {
+                apps.append(AppQuitTarget(name: app.localizedName ?? (path as NSString).lastPathComponent, path: path, pid: target.pid))
+            } else {
+                others.append(target)
+            }
+        }
+        var outcomes: [ActionOutcome] = []
+        if !apps.isEmpty { outcomes.append(await quitApps(apps)) }
+        if !others.isEmpty { outcomes.append(await Actions.terminate(others)) }
+        return outcomes.count == 1 ? outcomes[0] : Self.combine(outcomes, summary: outcomes.map(\.summary).joined(separator: " · "))
+    }
+
+    /// Asks each app to quit the normal way, the way the Dock's Quit does. Apps can save or ask first; none is force-quit.
+    func quitApps(_ targets: [AppQuitTarget]) async -> ActionOutcome {
+        var asked: [NSRunningApplication] = []
+        var missing: [String] = []
+        for target in targets {
+            guard let app = NSRunningApplication(processIdentifier: target.pid),
+                  app.bundleURL.map({ CwdParser.realPath($0.path) == CwdParser.realPath(target.path) }) == true else {
+                missing.append(target.name)
+                continue
+            }
+            app.terminate()
+            asked.append(app)
+        }
+        for _ in 0..<20 where !asked.allSatisfy(\.isTerminated) {
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        let stillOpen = asked.filter { !$0.isTerminated }.compactMap(\.localizedName)
+        var details: [String] = []
+        if !missing.isEmpty { details.append("Already closed: \(missing.joined(separator: ", ")).") }
+        if !stillOpen.isEmpty { details.append("Still open: \(stillOpen.joined(separator: ", ")). They may be asking you to save something.") }
+        let quit = asked.count - stillOpen.count
+        return ActionOutcome(succeeded: stillOpen.isEmpty, summary: "Quit \(quit) of \(targets.count) app\(targets.count == 1 ? "" : "s")", details: details)
     }
 
     /// Asks the app to quit the normal way (it can save or ask first), waiting up to 20 seconds.

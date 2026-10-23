@@ -17,7 +17,7 @@ enum SnapshotRunner {
             }
             try? FileManager.default.createDirectory(atPath: outputDirectory, withIntermediateDirectories: true)
             for section in DashboardSection.allCases {
-                let tall: Set<DashboardSection> = [.devTools, .applications]
+                let tall: Set<DashboardSection> = [.devTools, .applications, .memory]
                 await render(SectionContent(section: section).environment(model), size: CGSize(width: 980, height: tall.contains(section) ? 2600 : 1500),
                              to: "\(outputDirectory)/\(section.rawValue.replacingOccurrences(of: " ", with: "-")).png")
             }
@@ -26,6 +26,17 @@ enum SnapshotRunner {
             if let app = model.snapshot.apps?.apps.first(where: { $0.name == detailName }) {
                 await render(AppDetail(app: app).environment(model).padding(16).background(.background.secondary), size: CGSize(width: 980, height: 700),
                              to: "\(outputDirectory)/App-Detail.png")
+            }
+            // The memory scan only reads; nothing is freed here.
+            await model.memoryScan.scan(model)
+            await render(MemoryView().environment(model), size: CGSize(width: 1100, height: 3400), to: "\(outputDirectory)/Memory-Scan.png")
+            if let entry = model.groupedProcessEntries().first(where: { $0.appPath != nil }) {
+                await render(ProcessDetailView(entry: entry).environment(model).background(.background), size: CGSize(width: 440, height: 520),
+                             to: "\(outputDirectory)/Process-Detail.png")
+            }
+            if let system = model.processEntries().first(where: { $0.classification.kind == .system && $0.classification.description != nil }) {
+                await render(ProcessDetailView(entry: system).environment(model).background(.background), size: CGSize(width: 440, height: 520),
+                             to: "\(outputDirectory)/Process-Detail-System.png")
             }
             await model.permissions.refresh(repoRoots: model.settings.repoRoots)
             await render(PermissionsCard(startExpanded: true).environment(model).padding(24), size: CGSize(width: 980, height: 820),

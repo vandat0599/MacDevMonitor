@@ -162,7 +162,11 @@ struct DeepCleanView: View {
                 if !tasks.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Label(category.rawValue, systemImage: category.symbol).font(.title3.weight(.semibold))
-                        ForEach(tasks) { TaskCard(task: $0) }
+                        ForEach(tasks) { task in
+                            CleanupTaskCard(task: task, isOn: Binding(
+                                get: { deep.selected.contains(task.id) },
+                                set: { if $0 { deep.selected.insert(task.id) } else { deep.selected.remove(task.id) } }))
+                        }
                     }
                 }
             }
@@ -301,18 +305,15 @@ struct DeepCleanView: View {
     }
 }
 
-private struct TaskCard: View {
-    @Environment(AppModel.self) private var model
+/// One checklist item (Deep Clean, Free Up Memory): title, safety, explanation, size and the items it covers.
+struct CleanupTaskCard: View {
     var task: CleanupTask
+    @Binding var isOn: Bool
 
     var body: some View {
-        let deep = model.deepClean
-        let isOn = Binding(
-            get: { deep.selected.contains(task.id) },
-            set: { if $0 { deep.selected.insert(task.id) } else { deep.selected.remove(task.id) } })
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Toggle(isOn: isOn) { EmptyView() }.toggleStyle(.checkbox).labelsHidden()
+                Toggle(isOn: $isOn) { EmptyView() }.toggleStyle(.checkbox).labelsHidden()
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
                         Text(task.title).font(.body.weight(.semibold))
@@ -348,11 +349,11 @@ private struct TaskCard: View {
         }
         .padding(14)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(deep.selected.contains(task.id) ? Color.accentColor.opacity(0.6) : .clear, lineWidth: 1.5))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(isOn ? Color.accentColor.opacity(0.6) : .clear, lineWidth: 1.5))
     }
 }
 
-private struct RunRow: View {
+struct RunRow: View {
     var run: TaskRun
     var showDetails = false
 

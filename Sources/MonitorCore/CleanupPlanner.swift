@@ -17,6 +17,8 @@ public enum CleanupSafety: String, Sendable {
 
 public enum CleanupAction: Sendable, Hashable {
     case terminate([ProcessTarget])
+    /// Apps asked to quit the normal way, so they can save or ask first.
+    case quitApps([AppQuitTarget])
     case shutdownSimulators([String])
     case cleanWorktrees(prune: [String], unlock: [WorktreeRef])
     case removeWorktrees([WorktreeRef])
@@ -44,7 +46,7 @@ public enum CleanupAction: Sendable, Hashable {
     public var order: Int {
         switch self {
         case .terminate: 10
-        case .quitApp: 12
+        case .quitApp, .quitApps: 12
         case .uninstallApps: 38
         case .trashAppData: 42
         case .deleteIdleArtifacts: 44

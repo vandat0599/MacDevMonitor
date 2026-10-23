@@ -71,3 +71,26 @@ import Testing
         #expect(ClaudeSessions.projectFolderName(for: "/Users/dat") == "-Users-dat")
     }
 }
+
+@Suite struct ShellConcurrencyTests {
+    /// Many short commands at once: the case where `waitUntilExit()` used to miss an exit and hang forever.
+    @Test(.timeLimit(.minutes(1))) func manyConcurrentCommandsAllComplete() async {
+        let results = await withTaskGroup(of: Bool.self) { group in
+            for index in 0..<60 {
+                group.addTask { (try? await Shell.run("/bin/echo", ["run \(index)"], timeout: 20))?.output == "run \(index)\n" }
+            }
+            var all: [Bool] = []
+            for await ok in group { all.append(ok) }
+            return all
+        }
+        #expect(results.count == 60)
+        #expect(results.allSatisfy { $0 })
+    }
+
+    @Test(.timeLimit(.minutes(1))) func aFinishedCommandThatLeavesItsPipeOpenStillReturns() async {
+        // The shell exits at once but its background child keeps stdout open for 30 s.
+        let start = Date()
+        _ = try? await Shell.run("/bin/sh", ["-c", "sleep 30 & echo started"], timeout: 2)
+        #expect(Date().timeIntervalSince(start) < 10)
+    }
+}
