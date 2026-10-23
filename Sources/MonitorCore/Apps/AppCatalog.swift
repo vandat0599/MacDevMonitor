@@ -162,6 +162,10 @@ public struct AppLeftover: Sendable, Hashable, Identifiable {
     /// Owned by root or in /Library: removing it needs the administrator prompt.
     public var needsAdmin: Bool
     public var size: Int64?
+    /// Recreated when needed (DerivedData), so it also counts as the app's cache.
+    public var rebuilds: Bool = false
+    /// What it is, for locations the app's name doesn't explain.
+    public var note: String? = nil
     public var id: String { category.rawValue + ":" + path }
 
     public var name: String { category == .receipts || category == .homebrew ? path : (path as NSString).lastPathComponent }
@@ -176,6 +180,8 @@ public struct LeftoverListing: Sendable {
     public var homeEntries: [String]
     public var receipts: [String]
     public var home: String
+    /// Known app locations (see `KnownAppLocations`) that exist on this Mac.
+    public var knownLocations: [String] = []
 
     public static func read(home: String = NSHomeDirectory(), hiddenCacheDirs: [String] = LeftoverLocation.defaultHiddenCacheDirs) async -> LeftoverListing {
         let fm = FileManager.default
@@ -192,8 +198,10 @@ public struct LeftoverListing: Sendable {
         }
         let homeEntries = ((try? fm.contentsOfDirectory(atPath: home)) ?? []).filter { $0.hasPrefix(".") }
         let pkgs = (try? await Shell.check("/usr/sbin/pkgutil", ["--pkgs"], timeout: 60)) ?? ""
-        return LeftoverListing(entries: entries, vendorChildren: vendorChildren, homeEntries: homeEntries,
-                               receipts: pkgs.split(separator: "\n").map(String.init).filter { !$0.hasPrefix("com.apple.") }, home: home)
+        var listing = LeftoverListing(entries: entries, vendorChildren: vendorChildren, homeEntries: homeEntries,
+                                      receipts: pkgs.split(separator: "\n").map(String.init).filter { !$0.hasPrefix("com.apple.") }, home: home)
+        listing.knownLocations = KnownAppLocations.allPaths(home: home).filter { fm.fileExists(atPath: $0) }.sorted()
+        return listing
     }
 }
 
@@ -225,6 +233,11 @@ public enum AppLeftoverFinder {
                 }
                 // Every account on this Mac shares /Users/Shared, so a folder there may hold other people's files.
                 if location.path == "/Users/Shared" { match.strength = .weak }
+                if location.category == .knownData {
+                    // ~/Library is mostly macOS's; a folder there only hints at an app, so it's never pre-ticked.
+                    guard !LeftoverLocation.libraryNamesOwnedByMacOS.contains(name.lowercased()), match.reason == .name else { continue }
+                    match.strength = .weak
+                }
                 let path = location.path + "/" + name
                 found.append(AppLeftover(path: path, category: location.category, match: match,
                                          needsAdmin: location.system || !isUserRemovable(path), size: nil))
@@ -258,6 +271,15 @@ public enum AppLeftoverFinder {
                     found.append(AppLeftover(path: receipt, category: .receipts, match: LeftoverMatch(reason: .receipt, strength: .weak), needsAdmin: true, size: nil))
                 }
             }
+        }
+        let alreadyFound = Set(found.map(\.path))
+        for place in KnownAppLocations.locations(for: identity.bundleID) {
+            let path = place.absolute(home: listing.home)
+            guard listing.knownLocations.contains(path), !alreadyFound.contains(path) else { continue }
+            found.append(AppLeftover(path: path, category: .knownData,
+                                     match: LeftoverMatch(reason: .knownLocation, strength: place.ticked && !sharesBundleID ? .strong : .weak),
+                                     needsAdmin: path.hasPrefix("/Library/") || (FileManager.default.fileExists(atPath: path) && !isUserRemovable(path)), size: nil,
+                                     rebuilds: place.rebuilds, note: place.note))
         }
         if case .homebrew(let token) = app.source {
             // Unticked: `brew uninstall` runs the cask's own uninstall steps, which act outside the Trash.

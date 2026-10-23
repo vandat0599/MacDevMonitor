@@ -33,6 +33,7 @@ public enum LeftoverCategory: String, Sendable, CaseIterable {
     case applicationSupport = "App data"
     case caches = "Caches"
     case hiddenCaches = "Hidden caches"
+    case knownData = "Other places it keeps data"
     case preferences = "Preferences"
     case containers = "Sandbox container"
     case groupContainers = "Shared container"
@@ -54,6 +55,7 @@ public enum LeftoverCategory: String, Sendable, CaseIterable {
         case .applicationSupport: "folder"
         case .caches: "archivebox"
         case .hiddenCaches: "archivebox.fill"
+        case .knownData: "externaldrive"
         case .preferences: "slider.horizontal.3"
         case .containers, .groupContainers: "shippingbox"
         case .savedState: "macwindow"
@@ -113,8 +115,25 @@ public struct LeftoverLocation: Sendable, Hashable {
             + system.map { LeftoverLocation(path: "/Library/" + $0.0, category: $0.1, system: true) }
             + hiddenCacheDirs.map { LeftoverLocation(path: $0, category: .hiddenCaches, system: false) }
             // Some apps (Adobe, games, scanner software) keep data for every account here.
-            + [LeftoverLocation(path: "/Users/Shared", category: .applicationSupport, system: false)]
+            + [LeftoverLocation(path: "/Users/Shared", category: .applicationSupport, system: false),
+               // Folders straight inside ~/Library named after an app (~/Library/Unity); always unticked.
+               LeftoverLocation(path: home + "/Library", category: .knownData, system: false)]
     }
+
+    /// Folders directly in ~/Library that belong to macOS or are the Library's own locations; never an app's leftovers.
+    public static let libraryNamesOwnedByMacOS: Set<String> = [
+        "accessibility", "accounts", "applemediaservices", "application scripts", "application support", "assistant", "assistants",
+        "audio", "autosave information", "biome", "caches", "calendars", "callservices", "cloudstorage", "colorpickers", "colors",
+        "compositions", "contacts", "containermanager", "containers", "cookies", "corefollowup", "daemon containers",
+        "datadeliveryservices", "developer", "donotdisturb", "duetexpertcenter", "favorites", "finance", "financebackup",
+        "fontcollections", "fonts", "frontboard", "gamekit", "group containers", "httpstorages", "homekit", "identityservices",
+        "input methods", "intelligenceplatform", "intents", "internet plug-ins", "keyboard layouts", "keyboardservices", "keychains",
+        "languagemodeling", "launchagents", "lockdownmode", "logs", "mail", "mediaanalysis", "messages", "metadata", "mobile documents",
+        "news", "passes", "personalizationportrait", "photos", "preferencepanes", "preferences", "printers", "privatecloudcompute",
+        "responsekit", "safari", "safarisafebrowsing", "saved application state", "screen savers", "services", "sharing", "shortcuts",
+        "sounds", "spelling", "spotlight", "statuskit", "suggestions", "translation", "trial", "unifiedassetframework", "weather",
+        "webkit", "contextual menu items", "quicklook", "reminders", "notes", "voicememos", "studio", "group containers",
+    ]
 }
 
 public enum MatchReason: String, Sendable, Hashable {
@@ -125,6 +144,7 @@ public enum MatchReason: String, Sendable, Hashable {
     case vendor = "Same developer"
     case receipt = "Installer receipt"
     case homebrew = "Homebrew cask"
+    case knownLocation = "Known location"
 }
 
 public enum MatchStrength: Sendable, Hashable {
@@ -295,6 +315,8 @@ public struct AppRemovalPolicy: Sendable {
         let locations = LeftoverLocation.all(home: home, hiddenCacheDirs: hiddenCacheDirs)
         // A location itself (Logs/DiagnosticReports sits inside Logs) is never a removable entry.
         if locations.contains(where: { $0.path == path }) { return false }
+        if KnownAppLocations.allPaths(home: home).contains(path) { return true }
+        if parent == home + "/Library" { return !LeftoverLocation.libraryNamesOwnedByMacOS.contains(name.lowercased()) }
         if locations.contains(where: { $0.path == parent }) { return true }
         if path.hasSuffix(".app") {
             return ["/Applications", home + "/Applications"].contains { parent == $0 || parent.hasPrefix($0 + "/") }

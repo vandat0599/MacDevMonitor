@@ -157,3 +157,59 @@ import Testing
         #expect(found.first { $0.path.hasSuffix("/Firefox") }?.match.strength == .weak)
     }
 }
+
+@Suite struct KnownLocationTests {
+    let home = "/Users/me"
+    let xcode = AppIdentity(bundleID: "com.apple.dt.Xcode", name: "Xcode", executable: "Xcode", teamID: nil)
+    let studio = AppIdentity(bundleID: "com.google.android.studio", name: "Android Studio", executable: "studio", teamID: nil)
+
+    func app(_ identity: AppIdentity) -> AppInfo {
+        AppInfo(path: "/Applications/\(identity.name).app", identity: identity, version: nil, source: .other, protectionReason: nil,
+                lastUsed: nil, size: nil, runningPIDs: [])
+    }
+
+    func listing(known: [String], library: [String] = []) -> LeftoverListing {
+        var listing = LeftoverListing(entries: [LeftoverLocation(path: home + "/Library", category: .knownData, system: false): library],
+                                      vendorChildren: [:], homeEntries: [], receipts: [], home: home)
+        listing.knownLocations = known
+        return listing
+    }
+
+    @Test func xcodesDeveloperFoldersAreFoundAndTaggedByWhatTheyHold() {
+        let known = ["/Library/Developer/Xcode/DerivedData", "/Library/Developer/CoreSimulator", "/Library/Developer/Xcode/Archives",
+                     "/Library/Developer/Xcode/iOS DeviceSupport"].map { home + $0 }
+        let found = AppLeftoverFinder.find(app: app(xcode), listing: listing(known: known), otherApps: [xcode, studio])
+        func item(_ suffix: String) -> AppLeftover? { found.first { $0.path == home + suffix } }
+        #expect(item("/Library/Developer/Xcode/DerivedData")?.category == .knownData)
+        #expect(item("/Library/Developer/Xcode/DerivedData")?.match.strength == .strong)
+        #expect(item("/Library/Developer/Xcode/DerivedData")?.rebuilds == true)
+        #expect(item("/Library/Developer/CoreSimulator")?.match.strength == .strong)
+        #expect(item("/Library/Developer/CoreSimulator")?.rebuilds == false)
+        // Archives hold the symbols for builds you shipped: listed, never pre-ticked.
+        #expect(item("/Library/Developer/Xcode/Archives")?.match.strength == .weak)
+        // Another app's known locations are never claimed.
+        let theirs = AppLeftoverFinder.find(app: app(studio), listing: listing(known: known), otherApps: [xcode, studio])
+        #expect(!theirs.contains { $0.path.contains("/Developer/") })
+    }
+
+    @Test func rebuildableKnownLocationsCountAsCaches() {
+        let known = [home + "/Library/Developer/Xcode/DerivedData", home + "/Library/Developer/CoreSimulator"]
+        let found = AppLeftoverFinder.find(app: app(xcode), listing: listing(known: known), otherApps: [xcode])
+        #expect(AppCaches.items(from: found).map(\.path) == [home + "/Library/Developer/Xcode/DerivedData"])
+    }
+
+    @Test func policyAllowsKnownLocationsButNotTheirParents() {
+        let policy = AppRemovalPolicy(home: home, selfBundlePath: "/Applications/Mac Dev Monitor.app", hiddenCacheDirs: [])
+        #expect(policy.isAllowed(home + "/Library/Developer/Xcode/DerivedData"))
+        #expect(policy.isAllowed(home + "/Library/Android/sdk"))
+        #expect(!policy.isAllowed(home + "/Library/Developer"))
+        #expect(!policy.isAllowed(home + "/Library/Developer/Xcode"))
+    }
+
+    @Test func libraryFoldersNamedAfterAnAppAreOfferedUnticked() {
+        let unity = AppIdentity(bundleID: "com.unity3d.UnityEditor5.x", name: "Unity", executable: "Unity", teamID: nil)
+        let found = AppLeftoverFinder.find(app: app(unity), listing: listing(known: [], library: ["Unity", "Keychains", "Mail"]), otherApps: [unity])
+        #expect(found.first { $0.path == home + "/Library/Unity" }?.match.strength == .weak)
+        #expect(!found.contains { $0.path.hasSuffix("/Keychains") || $0.path.hasSuffix("/Mail") })
+    }
+}

@@ -251,8 +251,12 @@ struct AppDetail: View {
                         .font(.callout.monospaced()).lineLimit(1).truncationMode(.middle).help(item.path)
                     Chip(text: item.match.reason.rawValue, color: item.match.strength == .strong ? .secondary : .orange)
                     if item.match.strength == .weak {
-                        Text("may be shared").font(.caption).foregroundStyle(.orange)
+                        // Known locations start unticked because they hold your work or are shared; their note says which.
+                        Text(item.category == .knownData && item.match.reason == .knownLocation ? "your call" : "may be shared")
+                            .font(.caption).foregroundStyle(.orange)
                     }
+                    if item.rebuilds { Chip(text: "Rebuilds", color: .blue) }
+                    if let note = item.note { Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(note) }
                     if item.needsAdmin { Image(systemName: "lock.fill").foregroundStyle(.secondary).help("Needs your administrator password") }
                     Spacer()
                     Text(formatBytes(item.size)).monospacedDigit().font(.callout).foregroundStyle(.secondary)

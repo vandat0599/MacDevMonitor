@@ -18,7 +18,11 @@ public enum AppCaches {
 
     /// Only folders that surely belong to the app and need no password; caches shared with other apps stay out.
     public static func items(from leftovers: [AppLeftover]) -> [AppLeftover] {
-        leftovers.filter { categories.contains($0.category) && $0.isFile && $0.match.strength == .strong && !$0.needsAdmin }
+        leftovers.filter { isCache($0) && $0.isFile && $0.match.strength == .strong && !$0.needsAdmin }
+    }
+
+    static func isCache(_ item: AppLeftover) -> Bool {
+        categories.contains(item.category) || (item.category == .knownData && item.rebuilds)
     }
 
     /// Total bytes per key (an app's path), measuring each folder once.
@@ -32,19 +36,25 @@ public enum AppCaches {
 /// Clears an app's caches without uninstalling it. Caches are rebuilt by the app, so they're deleted rather than trashed.
 public enum AppCacheCleaner {
     public static func clear(_ items: [AppLeftover], app: AppInfo, policy: AppRemovalPolicy = AppRemovalPolicy(),
-                             isRunning: @Sendable (AppInfo) async -> Bool = { await AppUninstaller.isRunning($0) }) async -> ActionOutcome {
+                             isRunning: @Sendable (AppInfo) async -> Bool = { await AppUninstaller.isRunning($0) },
+                             buildCheck: Actions.BuildCheck = { await Actions.runningBuilds() }) async -> ActionOutcome {
         func refuse(_ reason: String) -> ActionOutcome {
             ActionOutcome(succeeded: false, summary: "Kept \(app.name)'s caches", details: [reason])
         }
         if app.isProtected { return refuse("macOS protects \(app.name), so its caches are left to macOS.") }
         if await isRunning(app) { return refuse("\(app.name) is running. Quit it first: apps rewrite their caches while open.") }
+        // Command-line builds (other terminals, Claude Code sessions) write to DerivedData without Xcode open.
+        if items.contains(where: { $0.path.contains("/Library/Developer/") }) {
+            guard let builds = await buildCheck() else { return refuse("Couldn't check for running builds, so nothing was cleared.") }
+            if !builds.isEmpty { return refuse("xcodebuild is running (PID \(builds.map { String($0.pid) }.joined(separator: ", "))). Try again when it finishes.") }
+        }
 
         let sizes = await SizeReader.sizes(of: items.map(\.path))
         var details: [String] = []
         var cleared = 0
         var freed: Int64 = 0
         for item in items {
-            guard AppCaches.categories.contains(item.category), item.isFile else {
+            guard AppCaches.isCache(item), item.isFile else {
                 details.append("Kept \(item.name): \(item.category.rawValue) is not a cache.")
                 continue
             }
