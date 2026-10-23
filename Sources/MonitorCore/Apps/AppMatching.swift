@@ -32,6 +32,7 @@ public enum LeftoverCategory: String, Sendable, CaseIterable {
     case appBundle = "App"
     case applicationSupport = "App data"
     case caches = "Caches"
+    case hiddenCaches = "Hidden caches"
     case preferences = "Preferences"
     case containers = "Sandbox container"
     case groupContainers = "Shared container"
@@ -52,6 +53,7 @@ public enum LeftoverCategory: String, Sendable, CaseIterable {
         case .appBundle: "app"
         case .applicationSupport: "folder"
         case .caches: "archivebox"
+        case .hiddenCaches: "archivebox.fill"
         case .preferences: "slider.horizontal.3"
         case .containers, .groupContainers: "shippingbox"
         case .savedState: "macwindow"
@@ -77,7 +79,17 @@ public struct LeftoverLocation: Sendable, Hashable {
     /// Locations where developers nest per-product folders inside a vendor folder.
     public static let vendorCategories: Set<LeftoverCategory> = [.applicationSupport, .caches, .logs]
 
-    public static func all(home: String = NSHomeDirectory()) -> [LeftoverLocation] {
+    /// macOS's per-user cache and temp folders (`/var/folders/…/C` and `…/T`), where apps keep caches named after their bundle ID.
+    public static var defaultHiddenCacheDirs: [String] {
+        [_CS_DARWIN_USER_CACHE_DIR, _CS_DARWIN_USER_TEMP_DIR].compactMap { name in
+            var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+            guard confstr(name, &buffer, buffer.count) > 0 else { return nil }
+            let path = String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+            return path.hasSuffix("/") ? String(path.dropLast()) : path
+        }
+    }
+
+    public static func all(home: String = NSHomeDirectory(), hiddenCacheDirs: [String] = defaultHiddenCacheDirs) -> [LeftoverLocation] {
         let user: [(String, LeftoverCategory)] = [
             ("Application Support", .applicationSupport), ("Caches", .caches), ("Preferences", .preferences),
             ("Preferences/ByHost", .preferences), ("Containers", .containers), ("Group Containers", .groupContainers),
@@ -86,6 +98,8 @@ public struct LeftoverLocation: Sendable, Hashable {
             ("Application Scripts", .scripts), ("Internet Plug-Ins", .plugins), ("PreferencePanes", .plugins),
             ("Services", .plugins), ("QuickLook", .plugins), ("Spotlight", .plugins), ("Screen Savers", .plugins),
             ("Audio/Plug-Ins/Components", .plugins), ("Audio/Plug-Ins/VST", .plugins), ("Audio/Plug-Ins/VST3", .plugins),
+            ("Caches/com.apple.nsurlsessiond/Downloads", .hiddenCaches), ("Application Support/CrashReporter", .crashReports),
+            ("Input Methods", .plugins), ("ColorPickers", .plugins), ("Contextual Menu Items", .plugins),
         ]
         let system: [(String, LeftoverCategory)] = [
             ("Application Support", .applicationSupport), ("Caches", .caches), ("Preferences", .preferences),
@@ -93,9 +107,13 @@ public struct LeftoverLocation: Sendable, Hashable {
             ("Logs", .logs), ("Internet Plug-Ins", .plugins), ("PreferencePanes", .plugins), ("QuickLook", .plugins),
             ("Spotlight", .plugins), ("Screen Savers", .plugins), ("Audio/Plug-Ins/Components", .plugins),
             ("Audio/Plug-Ins/VST", .plugins), ("Audio/Plug-Ins/VST3", .plugins), ("Audio/Plug-Ins/HAL", .plugins),
+            ("Input Methods", .plugins), ("ColorPickers", .plugins),
         ]
         return user.map { LeftoverLocation(path: home + "/Library/" + $0.0, category: $0.1, system: false) }
             + system.map { LeftoverLocation(path: "/Library/" + $0.0, category: $0.1, system: true) }
+            + hiddenCacheDirs.map { LeftoverLocation(path: $0, category: .hiddenCaches, system: false) }
+            // Some apps (Adobe, games, scanner software) keep data for every account here.
+            + [LeftoverLocation(path: "/Users/Shared", category: .applicationSupport, system: false)]
     }
 }
 
@@ -258,10 +276,13 @@ public enum AppLeftoverMatcher {
 public struct AppRemovalPolicy: Sendable {
     public var home: String
     public var selfBundlePath: String
+    public var hiddenCacheDirs: [String]
 
-    public init(home: String = NSHomeDirectory(), selfBundlePath: String = Bundle.main.bundlePath) {
+    public init(home: String = NSHomeDirectory(), selfBundlePath: String = Bundle.main.bundlePath,
+                hiddenCacheDirs: [String] = LeftoverLocation.defaultHiddenCacheDirs) {
         self.home = home
         self.selfBundlePath = selfBundlePath
+        self.hiddenCacheDirs = hiddenCacheDirs
     }
 
     /// `vendorFolder` is the app's developer folder name (see `AppIdentity.vendorFolderName`); it allows one level deeper inside it.
@@ -271,7 +292,7 @@ public struct AppRemovalPolicy: Sendable {
         if path.hasPrefix("/System/") { return false }
         let parent = (path as NSString).deletingLastPathComponent
         let name = (path as NSString).lastPathComponent
-        let locations = LeftoverLocation.all(home: home)
+        let locations = LeftoverLocation.all(home: home, hiddenCacheDirs: hiddenCacheDirs)
         // A location itself (Logs/DiagnosticReports sits inside Logs) is never a removable entry.
         if locations.contains(where: { $0.path == path }) { return false }
         if locations.contains(where: { $0.path == parent }) { return true }

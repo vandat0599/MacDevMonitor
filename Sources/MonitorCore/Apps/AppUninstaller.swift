@@ -19,7 +19,8 @@ public enum AppUninstaller {
     /// Moves the ticked items to the Trash (recoverable until it's emptied). Root-owned items go through one administrator prompt.
     /// Refuses protected apps, running apps and any path outside `AppRemovalPolicy`.
     public static func uninstall(_ request: AppUninstallRequest, policy: AppRemovalPolicy = AppRemovalPolicy(),
-                                 home: String = NSHomeDirectory(), trash: TrashMover = systemTrash) async -> ActionOutcome {
+                                 home: String = NSHomeDirectory(), trash: TrashMover = systemTrash,
+                                 forgetPreferences: @Sendable (String) async -> Void = forgetPreferences) async -> ActionOutcome {
         let app = request.app
         func refuse(_ reason: String) -> ActionOutcome {
             ActionOutcome(succeeded: false, summary: "Left \(app.name) installed", details: [reason])
@@ -70,6 +71,12 @@ public enum AppUninstaller {
             }
         }
 
+        // macOS keeps preferences in memory (cfprefsd) and could write a removed file back; make it forget this app's.
+        if let bundleID = app.identity.bundleID,
+           moved.contains(where: { $0.category == .preferences && ($0.name == bundleID + ".plist" || $0.name.hasPrefix(bundleID + ".")) }) {
+            await forgetPreferences(bundleID)
+        }
+
         let appGone = !FileManager.default.fileExists(atPath: app.path)
         // Only once the app is really gone, and without Homebrew's automatic removal of "unused" dependencies.
         if appGone, let cask = request.items.first(where: { $0.category == .homebrew }) {
@@ -87,7 +94,14 @@ public enum AppUninstaller {
             details: details, freedBytes: nil)
     }
 
-    static func isRunning(_ app: AppInfo) async -> Bool {
+    /// Clears the app's preferences from macOS's preferences cache, including per-Mac (ByHost) ones.
+    @Sendable public static func forgetPreferences(_ bundleID: String) async {
+        guard bundleID.range(of: #"^[A-Za-z0-9.\-]+$"#, options: .regularExpression) != nil else { return }
+        _ = try? await Shell.run("/usr/bin/defaults", ["delete", bundleID], timeout: 20)
+        _ = try? await Shell.run("/usr/bin/defaults", ["-currentHost", "delete", bundleID], timeout: 20)
+    }
+
+    public static func isRunning(_ app: AppInfo) async -> Bool {
         guard let output = try? await Shell.check("/bin/ps", ["-axo", "pid=,ppid=,etime=,stat=,command="], timeout: 30) else { return true }
         let real = CwdParser.realPath(app.path)
         return PSParser.parse(output).contains { $0.command.hasPrefix(real + "/Contents/") || $0.command.hasPrefix(app.path + "/Contents/") }

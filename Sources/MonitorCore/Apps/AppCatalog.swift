@@ -177,11 +177,11 @@ public struct LeftoverListing: Sendable {
     public var receipts: [String]
     public var home: String
 
-    public static func read(home: String = NSHomeDirectory()) async -> LeftoverListing {
+    public static func read(home: String = NSHomeDirectory(), hiddenCacheDirs: [String] = LeftoverLocation.defaultHiddenCacheDirs) async -> LeftoverListing {
         let fm = FileManager.default
         var entries: [LeftoverLocation: [String]] = [:]
         var vendorChildren: [String: [String]] = [:]
-        for location in LeftoverLocation.all(home: home) {
+        for location in LeftoverLocation.all(home: home, hiddenCacheDirs: hiddenCacheDirs) {
             guard let names = try? fm.contentsOfDirectory(atPath: location.path) else { continue }
             entries[location] = names.filter { !$0.hasPrefix(".") }
             guard LeftoverLocation.vendorCategories.contains(location.category) else { continue }
@@ -208,12 +208,23 @@ public enum AppLeftoverFinder {
         let vendorIsUnique = identity.vendorPrefix != nil && !sharedVendor
         let shared = sharesBundleID || sharedVendor
         func adjusted(_ match: LeftoverMatch) -> LeftoverMatch { shared ? LeftoverMatch(reason: match.reason, strength: .weak) : match }
+        /// A name match stays this app's even when the developer makes other apps, as long as no other installed app's
+        /// name fits the entry too (Google's "Chrome" folder is Chrome's; "Firefox" could also be Firefox Developer Edition's).
+        func confirmed(_ match: LeftoverMatch, claimedByAnother: () -> Bool) -> LeftoverMatch {
+            guard match.strength == .weak, match.reason == .name, !sharesBundleID, !claimedByAnother() else { return match }
+            return LeftoverMatch(reason: .name, strength: .strong)
+        }
         var found: [AppLeftover] = [AppLeftover(path: app.path, category: .appBundle, match: LeftoverMatch(reason: .bundle, strength: .strong),
                                                 needsAdmin: !isUserRemovable(app.path), size: app.size)]
         for (location, names) in listing.entries {
             for name in names {
-                guard let match = AppLeftoverMatcher.match(entry: name, category: location.category, app: identity, vendorIsUnique: vendorIsUnique,
-                                                           sharedVendor: sharedVendor, sharesBundleID: sharesBundleID, otherBundleIDs: otherIDs) else { continue }
+                guard let raw = AppLeftoverMatcher.match(entry: name, category: location.category, app: identity, vendorIsUnique: vendorIsUnique,
+                                                         sharedVendor: sharedVendor, sharesBundleID: sharesBundleID, otherBundleIDs: otherIDs) else { continue }
+                var match = confirmed(raw) {
+                    others.contains { AppLeftoverMatcher.rawMatch(entry: name, category: location.category, app: $0, vendorIsUnique: false, otherBundleIDs: []) != nil }
+                }
+                // Every account on this Mac shares /Users/Shared, so a folder there may hold other people's files.
+                if location.path == "/Users/Shared" { match.strength = .weak }
                 let path = location.path + "/" + name
                 found.append(AppLeftover(path: path, category: location.category, match: match,
                                          needsAdmin: location.system || !isUserRemovable(path), size: nil))
@@ -226,7 +237,8 @@ public enum AppLeftoverFinder {
                 for child in children {
                     guard let match = AppLeftoverMatcher.matchVendorChild(child, app: identity) else { continue }
                     let path = location.path + "/" + folder + "/" + child
-                    found.append(AppLeftover(path: path, category: location.category, match: adjusted(match),
+                    let decided = confirmed(adjusted(match)) { others.contains { AppLeftoverMatcher.matchVendorChild(child, app: $0) != nil } }
+                    found.append(AppLeftover(path: path, category: location.category, match: decided,
                                              needsAdmin: location.system || !isUserRemovable(path), size: nil))
                 }
             }
@@ -329,6 +341,8 @@ public struct AppsSnapshot: Sendable {
     public var listing: LeftoverListing
     public var orphans: [OrphanedAppData]
     public var canReadContainers: Bool
+    /// Bytes of cache each app keeps (by app path), everywhere `AppCaches` looks.
+    public var cacheSizes: [String: Int64] = [:]
 
     public init(apps: [AppInfo], listing: LeftoverListing, orphans: [OrphanedAppData], canReadContainers: Bool) {
         self.apps = apps
@@ -339,6 +353,15 @@ public struct AppsSnapshot: Sendable {
 
     public func leftovers(for app: AppInfo) -> [AppLeftover] {
         AppLeftoverFinder.find(app: app, listing: listing, otherApps: apps.map(\.identity))
+    }
+
+    public func caches(for app: AppInfo) -> [AppLeftover] {
+        AppCaches.items(from: leftovers(for: app))
+    }
+
+    /// Measures every app's caches in one pass.
+    public mutating func measureCaches() async {
+        cacheSizes = await AppCaches.measure(Dictionary(uniqueKeysWithValues: apps.map { ($0.path, caches(for: $0)) }))
     }
 }
 

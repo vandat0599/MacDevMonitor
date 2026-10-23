@@ -29,6 +29,7 @@ struct ApplicationsView: View {
 
     enum Sort: String, CaseIterable, Identifiable {
         case size = "Size"
+        case cache = "Cache size"
         case lastUsed = "Last opened"
         case name = "Name"
         var id: String { rawValue }
@@ -43,7 +44,7 @@ struct ApplicationsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                PageHeader(title: "Applications", subtitle: "Every app, its size, when you last opened it, and everywhere it keeps data. Uninstalling moves it all to the Trash.")
+                PageHeader(title: "Applications", subtitle: "Every app, its size, its caches, when you last opened it, and everywhere it keeps data. Uninstalling moves all of it to the Trash.")
                 if let snapshot = model.snapshot.apps {
                     summary(snapshot)
                     controls
@@ -78,6 +79,9 @@ struct ApplicationsView: View {
                        symbol: "clock.badge.questionmark", health: unused.isEmpty ? .good : .warning, progress: nil)
             MetricCard(title: "Protected by macOS", value: "\(apps.filter(\.isProtected).count)", caption: "System apps no app can remove",
                        symbol: "lock", health: .good, progress: nil)
+            MetricCard(title: "App caches", value: ByteSize.format(snapshot.cacheSizes.values.reduce(0, +)),
+                       caption: "\(snapshot.cacheSizes.values.filter { $0 >= 1 << 20 }.count) apps · rebuilt as needed",
+                       symbol: "archivebox", health: .good, progress: nil)
             MetricCard(title: "Leftovers of deleted apps", value: "\(snapshot.orphans.count)",
                        caption: ByteSize.format(snapshot.orphans.compactMap(\.size).reduce(0, +)) + " · cleaned by Deep Clean",
                        symbol: "trash", health: snapshot.orphans.isEmpty ? .good : .warning, progress: nil)
@@ -88,7 +92,7 @@ struct ApplicationsView: View {
         HStack(spacing: 12) {
             TextField("Search apps", text: $search)
                 .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 260)
+                .frame(maxWidth: 220)
             Picker("Show", selection: $filter) {
                 ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -98,7 +102,25 @@ struct ApplicationsView: View {
             }
             .frame(maxWidth: 200)
             Spacer()
+            if let snapshot = model.snapshot.apps {
+                let requests = clearableCaches(snapshot)
+                let bytes = requests.map { snapshot.cacheSizes[$0.app.path] ?? 0 }.reduce(0, +)
+                Button {
+                    model.request(.clearAppCaches(requests, bytes: bytes))
+                } label: {
+                    Label("Clear All Caches · \(ByteSize.format(bytes))", systemImage: "archivebox")
+                }
+                .fixedSize()
+                .disabled(requests.isEmpty || model.runningAction != nil)
+                .help("Every app that isn't running and isn't protected by macOS. Settings, logins and documents stay.")
+            }
         }
+    }
+
+    /// Apps whose caches can be cleared now: not running, not protected, and holding at least 1 MB.
+    private func clearableCaches(_ snapshot: AppsSnapshot) -> [AppCacheRequest] {
+        snapshot.apps.filter { !$0.isProtected && !$0.isRunning && $0.path != Bundle.main.bundlePath && (snapshot.cacheSizes[$0.path] ?? 0) >= 1 << 20 }
+            .map { AppCacheRequest(app: $0, items: snapshot.caches(for: $0)) }
     }
 
     private func visible(_ apps: [AppInfo]) -> [AppInfo] {
@@ -117,6 +139,7 @@ struct ApplicationsView: View {
         return filtered.sorted { a, b in
             switch sort {
             case .size: return (a.size ?? 0) > (b.size ?? 0)
+            case .cache: return (model.snapshot.apps?.cacheSizes[a.path] ?? 0) > (model.snapshot.apps?.cacheSizes[b.path] ?? 0)
             case .lastUsed: return (a.lastUsed ?? .distantPast) < (b.lastUsed ?? .distantPast)
             case .name: return a.name.localizedStandardCompare(b.name) == .orderedAscending
             }
@@ -149,7 +172,12 @@ private struct AppRow: View {
                         }
                     }
                     Spacer()
-                    Text(formatBytes(app.size)).monospacedDigit().font(.body.weight(.medium))
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(formatBytes(app.size)).monospacedDigit().font(.body.weight(.medium))
+                        if let cache = model.snapshot.apps?.cacheSizes[app.path], cache >= 1 << 20 {
+                            Text("Cache \(ByteSize.format(cache))").font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                        }
+                    }
                     Image(systemName: "chevron.right")
                         .rotationEffect(.degrees(expanded ? 90 : 0))
                         .foregroundStyle(.secondary)
@@ -244,6 +272,16 @@ struct AppDetail: View {
             Text("\(chosen.count) of \(leftovers.count) selected · \(ByteSize.format(total))").foregroundStyle(.secondary)
             Spacer()
             Button("Show App in Finder") { model.reveal(app.path) }
+            let caches = AppCaches.items(from: leftovers)
+            if !app.isProtected, !caches.isEmpty {
+                // Measured for every app at scan time, so the button doesn't read 0 while this dropdown is still measuring.
+                let bytes = model.snapshot.apps?.cacheSizes[app.path] ?? caches.compactMap(\.size).reduce(0, +)
+                Button("Clear Caches (\(ByteSize.format(bytes)))…") {
+                    model.request(.clearAppCaches([AppCacheRequest(app: app, items: caches)], bytes: bytes))
+                }
+                .disabled(app.isRunning || model.runningAction != nil)
+                .help(app.isRunning ? "Quit \(app.name) first: apps rewrite their caches while open." : "Deletes only cache folders. Settings, logins and documents stay.")
+            }
             if !app.isProtected {
                 Button(app.isRunning ? "Quit & Uninstall…" : "Uninstall…") { confirm(chosen) }
                     .buttonStyle(.borderedProminent)

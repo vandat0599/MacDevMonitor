@@ -27,6 +27,8 @@ enum PendingAction: Hashable {
     case quitSelection(apps: [AppQuitTarget], processes: [ProcessTarget], detail: String)
     /// Any Deep Clean action run from a page, with the confirmation text the page wrote.
     case cleanup(CleanupAction, title: String, detail: String, confirmLabel: String)
+    /// Applications page: delete apps' caches without uninstalling them.
+    case clearAppCaches([AppCacheRequest], bytes: Int64)
 }
 
 struct Confirmation: Identifiable {
@@ -164,7 +166,9 @@ final class AppModel {
         let orphans = await OrphanedAppDataFinder.find(listing: listing, installed: apps, canReadContainers: canReadContainers) {
             !NSWorkspace.shared.urlsForApplications(withBundleIdentifier: $0).isEmpty
         }
-        return AppsSnapshot(apps: apps, listing: listing, orphans: orphans, canReadContainers: canReadContainers)
+        var snapshot = AppsSnapshot(apps: apps, listing: listing, orphans: orphans, canReadContainers: canReadContainers)
+        await snapshot.measureCaches()
+        return snapshot
     }
 
     /// Takes the slow sections from a scan Deep Clean just finished, so every page shows them. Memory, disk and processes
@@ -260,6 +264,13 @@ final class AppModel {
         case .quitSelection(let apps, let processes, let detail):
             let count = apps.count + processes.count
             return Confirmation(title: "Quit \(count) selected?", message: detail, confirmLabel: "Quit \(count)", destructive: true, action: action)
+        case .clearAppCaches(let requests, let bytes):
+            let names = requests.map(\.app.name)
+            let list = names.prefix(12).joined(separator: ", ") + (names.count > 12 ? " and \(names.count - 12) more" : "")
+            return Confirmation(
+                title: requests.count == 1 ? "Clear \(names[0])'s caches (\(ByteSize.format(bytes)))?" : "Clear caches of \(requests.count) apps (\(ByteSize.format(bytes)))?",
+                message: "Deletes their cache folders for good: \(list). Settings, logins and documents stay. Apps rebuild caches as they need them, so they may load a little slower the first time. Running apps are skipped.",
+                confirmLabel: "Clear Caches", destructive: true, action: action)
         case .cleanup(_, let title, let detail, let confirmLabel):
             return Confirmation(title: title, message: detail, confirmLabel: confirmLabel, destructive: true, action: action)
         case .fixAllSafe(let fixes):
@@ -331,6 +342,15 @@ final class AppModel {
             await run("Deleting runtime") { await Actions.deleteRuntime(identifier: identifier, freeing: size) }
         case .shutdownSimulators:
             await run("Shutting down simulators") { await Actions.shutdownAllSimulators() }
+        case .clearAppCaches(let requests, _):
+            await run("Clearing app caches") {
+                var outcomes: [ActionOutcome] = []
+                for request in requests { outcomes.append(await AppCacheCleaner.clear(request.items, app: request.app)) }
+                let freed = outcomes.compactMap(\.freedBytes).reduce(0, +)
+                let done = outcomes.filter(\.succeeded).count
+                return Self.combine(outcomes, summary: "Cleared caches of \(done) of \(requests.count) app\(requests.count == 1 ? "" : "s")" + (freed > 0 ? ", freeing \(ByteSize.format(freed))" : ""))
+            }
+            snapshot.apps = await Self.readApps(sizeMaxAge: 3600)
         case .cleanup(let cleanup, let title, _, _):
             await run(title.replacingOccurrences(of: "?", with: "")) { await self.executeCleanup(cleanup, sizeHint: nil) }
         }
