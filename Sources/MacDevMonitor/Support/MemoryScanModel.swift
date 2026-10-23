@@ -42,7 +42,8 @@ final class MemoryScanModel {
             bootedSimulators: app.snapshot.simulators?.devices.filter(\.isBooted) ?? [], thresholds: app.settings.thresholds)
         notice = nil
         tasks = MemoryAdvisor.findings(input)
-        selected = Set(tasks.filter(\.recommended).map(\.id))
+        // Everything found starts ticked; the user unticks what they want to keep.
+        selected = Set(tasks.map(\.id))
         scannedAt = Date()
         phase = .review
     }
@@ -51,9 +52,9 @@ final class MemoryScanModel {
         guard phase == .review, !selectedTasks.isEmpty, app.runningAction == nil else { return }
         guard !isStale else {
             // Results were too old to act on: refresh them, keep the user's ticks, and let them confirm again.
-            let previous = selected
+            let unticked = Set(tasks.map(\.id)).subtracting(selected)
             await scan(app)
-            selected = previous.intersection(tasks.map(\.id))
+            selected = Set(tasks.map(\.id)).subtracting(unticked)
             notice = "Those results were over two minutes old, so they were refreshed. Check the list and press Free Selected again."
             return
         }

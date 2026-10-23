@@ -30,6 +30,7 @@ enum SnapshotRunner {
             // The memory scan only reads; nothing is freed here.
             await model.memoryScan.scan(model)
             await render(MemoryView().environment(model), size: CGSize(width: 1100, height: 3400), to: "\(outputDirectory)/Memory-Scan.png")
+            await render(MenuBarView().environment(model), size: CGSize(width: 360, height: 760), to: "\(outputDirectory)/MenuBar-Scan.png")
             if let entry = model.groupedProcessEntries().first(where: { $0.appPath != nil }) {
                 await render(ProcessDetailView(entry: entry).environment(model).background(.background), size: CGSize(width: 440, height: 520),
                              to: "\(outputDirectory)/Process-Detail.png")
