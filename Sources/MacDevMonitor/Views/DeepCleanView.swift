@@ -159,14 +159,16 @@ struct DeepCleanView: View {
             selectionBar
             ForEach(CleanupCategory.allCases, id: \.self) { category in
                 let tasks = deep.plan.filter { $0.category == category }
-                if !tasks.isEmpty {
+                let showsRunning = category == .memory && !deep.running.isEmpty
+                if !tasks.isEmpty || showsRunning {
                     VStack(alignment: .leading, spacing: 10) {
                         Label(category.rawValue, systemImage: category.symbol).font(.title3.weight(.semibold))
                         ForEach(tasks) { task in
-                            CleanupTaskCard(task: task, isOn: Binding(
-                                get: { deep.selected.contains(task.id) },
-                                set: { if $0 { deep.selected.insert(task.id) } else { deep.selected.remove(task.id) } }))
+                            CleanupTaskCard(task: task, isOn: Binding(get: { deep.isOn(task) }, set: { deep.setTask(task, $0) }),
+                                            ticks: ItemTicks(isOn: { deep.isOn($0, in: task) }, set: { deep.setItems($0, in: task, $1) },
+                                                             ticked: deep.tickedCount(task)))
                         }
+                        if showsRunning { RunningNowCard() }
                     }
                 }
             }
@@ -178,7 +180,7 @@ struct DeepCleanView: View {
         let deep = model.deepClean
         return HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(deep.selectedTasks.count) of \(deep.plan.count) selected").font(.headline)
+                Text("\(deep.selectedTasks.count) task\(deep.selectedTasks.count == 1 ? "" : "s") selected").font(.headline)
                 Text(impactLine(disk: deep.selectedDisk, memory: deep.selectedMemory)).font(.callout).foregroundStyle(.secondary)
                 if let scanned = deep.scannedAt {
                     Text("Scanned \(scanned.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.tertiary)
@@ -187,7 +189,7 @@ struct DeepCleanView: View {
             Spacer()
             Button("Recommended") { deep.selectRecommended() }
             Button("All") { deep.selectAll() }
-            Button("None") { deep.selected.removeAll() }
+            Button("None") { deep.selectNone() }
             if deep.isStale {
                 Button {
                     Task { await deep.scan(model) }
@@ -221,10 +223,19 @@ struct DeepCleanView: View {
 
     private var confirmMessage: String {
         let tasks = CleanupPlanner.executionOrder(model.deepClean.selectedTasks)
-        var lines = tasks.map { "• " + $0.title }
+        var lines = tasks.map { task in
+            let total = model.deepClean.plan.first { $0.id == task.id }?.items.count ?? task.items.count
+            return "• " + task.title + (task.items.count < total ? " (\(task.items.count) of \(total))" : "")
+        }
         if tasks.contains(where: { $0.action == .restartFseventsd }) { lines.append("\nmacOS will ask for your administrator password to restart fseventsd.") }
         if tasks.contains(where: { $0.action == .restartMac }) { lines.append("The restart dialog opens last; save your work first.") }
         if model.settings.moveToTrash { lines.append("Folders go to the Trash; space is freed when you empty it.") }
+        let deep = model.deepClean
+        let risky = deep.running.flatMap(\.processes).filter { deep.runningSelected.contains($0.pid) && $0.classification.risk == .dangerous }
+        if !risky.isEmpty {
+            let names = Array(Set(risky.map(\.name))).sorted()
+            lines.append("\n⚠️ You ticked \(names.prefix(6).joined(separator: ", "))\(names.count > 6 ? " and \(names.count - 6) more" : ""). Stopping \(risky.count == 1 ? "it" : "them") can break sound, settings, other apps or a session in progress.")
+        }
         return lines.joined(separator: "\n")
     }
 
@@ -305,10 +316,30 @@ struct DeepCleanView: View {
     }
 }
 
+/// Per-row ticks for a task card: which rows are on and how to change them.
+struct ItemTicks {
+    var isOn: (CleanupItem) -> Bool
+    var set: ([String], Bool) -> Void
+    var ticked: Int
+}
+
 /// One checklist item (Deep Clean, Free Up Memory): title, safety, explanation, size and the items it covers.
+/// With `ticks`, every row (and every app's group of rows) can be ticked on its own.
 struct CleanupTaskCard: View {
     var task: CleanupTask
     @Binding var isOn: Bool
+    var ticks: ItemTicks?
+    @State private var showAll = false
+    @State private var expanded: Bool
+
+    static let rowLimit = 40
+
+    init(task: CleanupTask, isOn: Binding<Bool>, ticks: ItemTicks? = nil, startExpanded: Bool = false) {
+        self.task = task
+        _isOn = isOn
+        self.ticks = ticks
+        _expanded = State(initialValue: startExpanded)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -329,19 +360,10 @@ struct CleanupTaskCard: View {
                 }
             }
             if !task.items.isEmpty {
-                DisclosureGroup("\(task.items.count) item\(task.items.count == 1 ? "" : "s")") {
-                    ForEach(task.items.prefix(40)) { item in
-                        HStack {
-                            Text(item.label).lineLimit(1).truncationMode(.middle)
-                            if let detail = item.detail {
-                                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                            }
-                            Spacer()
-                            Text(formatBytes(item.bytes)).monospacedDigit().foregroundStyle(.secondary)
-                        }
-                        .font(.callout)
-                    }
-                    if task.items.count > 40 { Text("…and \(task.items.count - 40) more").font(.caption).foregroundStyle(.secondary) }
+                DisclosureGroup(isExpanded: $expanded) {
+                    itemList
+                } label: {
+                    Text(itemsLabel)
                 }
                 .font(.callout)
                 .padding(.leading, 30)
@@ -350,6 +372,214 @@ struct CleanupTaskCard: View {
         .padding(14)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(isOn ? Color.accentColor.opacity(0.6) : .clear, lineWidth: 1.5))
+    }
+
+    private var selectable: ItemTicks? { task.itemsSelectable ? ticks : nil }
+
+    private var itemsLabel: String {
+        let count = task.items.count
+        let all = "\(count) item\(count == 1 ? "" : "s")"
+        guard let ticks = selectable, isOn, ticks.ticked < count else { return all }
+        return "\(ticks.ticked) of \(all) ticked"
+    }
+
+    /// Rows in order, with consecutive rows of the same app gathered under it.
+    private var sections: [(group: String?, items: [CleanupItem])] {
+        let shown = showAll ? task.items : Array(task.items.prefix(Self.rowLimit))
+        var sections: [(group: String?, items: [CleanupItem])] = []
+        for item in shown {
+            if let last = sections.last, last.group == item.group, item.group != nil {
+                sections[sections.count - 1].items.append(item)
+            } else {
+                sections.append((item.group, [item]))
+            }
+        }
+        return sections
+    }
+
+    @ViewBuilder
+    private var itemList: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(sections.enumerated()), id: \.offset) { _, section in
+                if let group = section.group {
+                    groupHeader(group, section.items)
+                    ForEach(section.items) { row($0).padding(.leading, 22) }
+                } else {
+                    ForEach(section.items) { row($0) }
+                }
+            }
+            if task.items.count > Self.rowLimit {
+                Button(showAll ? "Show fewer" : "Show all \(task.items.count)") { showAll.toggle() }
+                    .buttonStyle(.link).font(.caption)
+            }
+            if ticks != nil, !task.itemsSelectable, task.items.count > 1 {
+                Text("These go together: this task acts on all of them at once.").font(.caption).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private func groupHeader(_ group: String, _ items: [CleanupItem]) -> some View {
+        HStack(spacing: 8) {
+            if let ticks = selectable {
+                Toggle(isOn: Binding(get: { items.allSatisfy(ticks.isOn) }, set: { ticks.set(items.map(\.id), $0) })) { EmptyView() }
+                    .toggleStyle(.checkbox).labelsHidden()
+            }
+            Text(group).font(.callout.weight(.semibold))
+            Chip(text: "\(items.count)", color: .secondary)
+            Spacer()
+            Text(formatBytes(items.compactMap(\.bytes).reduce(0, +))).monospacedDigit().foregroundStyle(.secondary)
+        }
+        .padding(.top, 4)
+    }
+
+    private func row(_ item: CleanupItem) -> some View {
+        HStack(spacing: 8) {
+            if let ticks = selectable {
+                Toggle(isOn: Binding(get: { ticks.isOn(item) }, set: { ticks.set([item.id], $0) })) { EmptyView() }
+                    .toggleStyle(.checkbox).labelsHidden()
+            }
+            Text(item.label).lineLimit(1).truncationMode(.middle)
+            if let detail = item.detail {
+                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(detail)
+            }
+            Spacer()
+            Text(formatBytes(item.bytes)).monospacedDigit().foregroundStyle(.secondary)
+        }
+        .font(.callout)
+        .opacity(selectable == nil || selectable!.isOn(item) ? 1 : 0.55)
+    }
+}
+
+/// Everything running at scan time, grouped by app. Nothing is ticked: the user picks what to stop.
+struct RunningNowCard: View {
+    @Environment(AppModel.self) private var model
+    @State private var query = ""
+    @State private var showAll = false
+    /// Snapshots open the first few apps.
+    var expandFirst = 0
+
+    static let groupLimit = 25
+
+    var body: some View {
+        let deep = model.deepClean
+        let groups = deep.running.filter { group in
+            query.isEmpty || group.name.localizedCaseInsensitiveContains(query) || group.processes.contains { $0.name.localizedCaseInsensitiveContains(query) }
+        }
+        let shown = showAll || !query.isEmpty ? groups : Array(groups.prefix(Self.groupLimit))
+        let processes = deep.running.flatMap(\.processes)
+        let ticked = processes.filter { deep.runningSelected.contains($0.pid) }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Running now: \(deep.running.count) apps and processes").font(.body.weight(.semibold))
+                    Text("Everything running when Deep Clean scanned, grouped by app, biggest first. Nothing here is ticked; tick what you want to stop. A fully ticked app is asked to quit the normal way, so it can save first. Red ones can break other apps or end work in progress. Locked ones macOS can't do without, or aren't yours.")
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                Text("\(ByteSize.format(processes.map(\.footprint).reduce(0, +))) RAM").font(.title3.weight(.semibold)).monospacedDigit()
+            }
+            HStack {
+                TextField("Filter by app or process", text: $query).textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                Spacer()
+                if !ticked.isEmpty {
+                    Text("\(ticked.count) ticked · \(ByteSize.format(ticked.map(\.footprint).reduce(0, +)))").font(.callout).foregroundStyle(.secondary)
+                    Button("Untick All") { deep.runningSelected = [] }
+                }
+            }
+            VStack(spacing: 2) {
+                ForEach(Array(shown.enumerated()), id: \.element.id) { index, group in
+                    RunningGroupRow(group: group, startExpanded: index < expandFirst)
+                }
+            }
+            if groups.count > Self.groupLimit, query.isEmpty {
+                Button(showAll ? "Show the biggest \(Self.groupLimit)" : "Show all \(groups.count)") { showAll.toggle() }.buttonStyle(.link).font(.callout)
+            } else if groups.isEmpty {
+                Text("Nothing matches “\(query)”.").font(.callout).foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ticked.isEmpty ? .clear : Color.accentColor.opacity(0.6), lineWidth: 1.5))
+    }
+}
+
+struct RunningGroupRow: View {
+    @Environment(AppModel.self) private var model
+    var group: RunningGroup
+    @State private var expanded: Bool
+
+    init(group: RunningGroup, startExpanded: Bool = false) {
+        self.group = group
+        _expanded = State(initialValue: startExpanded)
+    }
+
+    var body: some View {
+        if group.processes.count == 1, group.appPath == nil {
+            processRow(group.processes[0], indented: false)
+        } else {
+            DisclosureGroup(isExpanded: $expanded) {
+                ForEach(group.processes) { processRow($0, indented: true) }
+            } label: {
+                header
+            }
+        }
+    }
+
+    private var header: some View {
+        let deep = model.deepClean
+        let selectable = group.selectable
+        let ticked = selectable.filter { deep.runningSelected.contains($0.pid) }
+        return HStack(spacing: 8) {
+            Toggle(isOn: Binding(
+                get: { !selectable.isEmpty && ticked.count == selectable.count },
+                set: { on in
+                    let pids = selectable.map(\.pid)
+                    if on { deep.runningSelected.formUnion(pids) } else { deep.runningSelected.subtract(pids) }
+                })) { EmptyView() }
+                .toggleStyle(.checkbox).labelsHidden()
+                .disabled(selectable.isEmpty)
+                .help(selectable.isEmpty ? (group.processes.first?.blockedReason ?? "") : "")
+            if let path = group.appPath {
+                Image(nsImage: IconCache.shared.icon(for: path)).resizable().frame(width: 18, height: 18)
+            }
+            Text(group.name).font(.callout.weight(.semibold)).lineLimit(1)
+            Chip(text: "\(group.processes.count) process\(group.processes.count == 1 ? "" : "es")", color: .secondary)
+            if let kind = group.processes.first?.classification.kind { Chip(text: kind.rawValue, color: kind.color) }
+            if selectable.isEmpty {
+                Image(systemName: "lock.fill").foregroundStyle(.secondary).imageScale(.small).help(group.processes.first?.blockedReason ?? "")
+            } else if !ticked.isEmpty {
+                Text(ticked.count == selectable.count && group.quitTarget != nil ? "quits normally" : "\(ticked.count) of \(selectable.count) ticked")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(ByteSize.format(group.footprint)).monospacedDigit().foregroundStyle(.secondary)
+        }
+    }
+
+    private func processRow(_ process: RunningProcess, indented: Bool) -> some View {
+        let deep = model.deepClean
+        return HStack(spacing: 8) {
+            Toggle(isOn: Binding(
+                get: { deep.runningSelected.contains(process.pid) },
+                set: { if $0 { deep.runningSelected.insert(process.pid) } else { deep.runningSelected.remove(process.pid) } })) { EmptyView() }
+                .toggleStyle(.checkbox).labelsHidden()
+                .disabled(process.blockedReason != nil)
+            Text(process.name).lineLimit(1).truncationMode(.middle).help(process.command)
+            Text("PID \(process.pid)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            if process.classification.risk != .safe {
+                Chip(text: process.classification.risk.rawValue, color: process.classification.risk.color).help(process.classification.riskReason)
+            }
+            if let reason = process.blockedReason {
+                Image(systemName: "lock.fill").foregroundStyle(.secondary).imageScale(.small).help(reason)
+            }
+            Spacer()
+            Text(ByteSize.format(process.footprint)).monospacedDigit().foregroundStyle(.secondary)
+        }
+        .font(.callout)
+        .padding(.leading, indented ? 0 : 12)
+        .padding(.vertical, 1)
+        .opacity(process.blockedReason == nil ? 1 : 0.6)
     }
 }
 

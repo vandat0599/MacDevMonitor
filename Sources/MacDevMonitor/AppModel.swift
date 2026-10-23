@@ -404,6 +404,19 @@ final class AppModel {
             if idle.count < paths.count { outcome.details.insert("\(paths.count - idle.count) were used since the scan and were kept.", at: 0) }
             return outcome
         case .deleteUnavailableSimulators: return await Actions.deleteUnavailableSimulators(freeing: sizeHint)
+        case .deleteUnusableSimulators(let udids):
+            // Re-check: a simulator whose iOS version came back since the scan is usable again and kept.
+            guard let current = try? await SimulatorReader.read() else {
+                return ActionOutcome(succeeded: false, summary: "Kept the simulators", details: ["Couldn't re-check them, so nothing was deleted."])
+            }
+            let unusable = Dictionary(current.unavailable.map { ($0.udid, $0) }, uniquingKeysWith: { first, _ in first })
+            var outcomes: [ActionOutcome] = []
+            for udid in udids {
+                guard let device = unusable[udid] else { continue }
+                outcomes.append(await Actions.deleteSimulator(udid: udid, freeing: device.dataSize))
+            }
+            guard !outcomes.isEmpty else { return ActionOutcome(succeeded: true, summary: "Nothing to delete: those simulators are usable again or gone") }
+            return Self.combine(outcomes, summary: "Deleted \(outcomes.filter(\.succeeded).count) of \(udids.count) unusable simulators")
         case .deleteRuntimes(let ids):
             var outcomes: [ActionOutcome] = []
             for id in ids {

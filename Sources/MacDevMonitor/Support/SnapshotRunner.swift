@@ -60,8 +60,24 @@ enum SnapshotRunner {
                          to: "\(outputDirectory)/Permissions.png")
             // Deep Clean's scan only reads; it never cleans here.
             await model.deepClean.scan(model)
-            await render(DeepCleanView().environment(model), size: CGSize(width: 980, height: 2600),
+            await render(DeepCleanView().environment(model), size: CGSize(width: 980, height: 4200),
                          to: "\(outputDirectory)/Deep-Clean-Review.png")
+            // Row ticks: one task opened with its second row unticked, and "Running now" with the first apps opened.
+            let deep = model.deepClean
+            if let task = deep.plan.first(where: { $0.id == "app-caches" }) ?? deep.plan.first(where: \.itemsSelectable) {
+                deep.setTask(task, true)
+                if task.items.count > 1 { deep.setItems([task.items[1].id], in: task, false) }
+                await render(CleanupTaskCard(task: task, isOn: Binding(get: { deep.isOn(task) }, set: { deep.setTask(task, $0) }),
+                                             ticks: ItemTicks(isOn: { deep.isOn($0, in: task) }, set: { deep.setItems($0, in: task, $1) }, ticked: deep.tickedCount(task)),
+                                             startExpanded: true).padding(24),
+                             size: CGSize(width: 980, height: 900), to: "\(outputDirectory)/Deep-Clean-Rows.png")
+            }
+            if let second = deep.running.dropFirst().first { deep.runningSelected = Set(second.selectable.map(\.pid)) }
+            if let third = deep.running.dropFirst(2).first, let helper = third.selectable.last { deep.runningSelected.insert(helper.pid) }
+            await render(RunningNowCard(expandFirst: 3).environment(model).padding(24), size: CGSize(width: 980, height: 1500),
+                         to: "\(outputDirectory)/Deep-Clean-Running.png")
+            deep.selectRecommended()
+            deep.runningSelected = []
             // Test hook: clean one task, but only when every item in it is a throwaway "MDMTest" fixture.
             if let id = ProcessInfo.processInfo.environment["MDM_SNAPSHOT_CLEAN"],
                let task = model.deepClean.plan.first(where: { $0.id == id }),

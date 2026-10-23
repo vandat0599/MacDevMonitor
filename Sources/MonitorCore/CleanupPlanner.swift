@@ -28,6 +28,8 @@ public enum CleanupAction: Sendable, Hashable {
     /// Folders chosen because nothing inside changed for `idleDays`; re-checked just before deleting.
     case deleteIdleFolders([String], idleDays: Double)
     case deleteUnavailableSimulators
+    /// Some of the unusable simulators, each re-checked as still unusable before it's deleted.
+    case deleteUnusableSimulators([String])
     case deleteRuntimes([String])
     case restartFseventsd
     case restartMac
@@ -66,7 +68,7 @@ public enum CleanupAction: Sendable, Hashable {
         case .removeWorktrees: 35
         case .deleteStaleBuildFolders: 40
         case .deleteFolders, .deleteIdleFolders: 45
-        case .deleteUnavailableSimulators: 50
+        case .deleteUnavailableSimulators, .deleteUnusableSimulators: 50
         case .deleteRuntimes: 55
         case .restartFseventsd: 90
         case .restartMac: 100
@@ -80,12 +82,15 @@ public struct CleanupItem: Sendable, Hashable, Identifiable {
     public var label: String
     public var detail: String?
     public var bytes: Int64?
+    /// Rows with the same group (an app's name) are listed together under it.
+    public var group: String?
 
-    public init(id: String, label: String, detail: String? = nil, bytes: Int64? = nil) {
+    public init(id: String, label: String, detail: String? = nil, bytes: Int64? = nil, group: String? = nil) {
         self.id = id
         self.label = label
         self.detail = detail
         self.bytes = bytes
+        self.group = group
     }
 }
 
@@ -512,7 +517,10 @@ public enum CleanupPlanner {
             id: "app-caches", category: .disk, title: "Clear caches of \(kept.count) app\(kept.count == 1 ? "" : "s")",
             explanation: "Cache folders of apps that aren't running. Settings, logins and documents stay; apps rebuild caches as they need them, so they may open a little slower once.",
             safety: .rebuilds, recommended: false, diskBytes: kept.map(\.1).reduce(0, +), memoryBytes: nil,
-            items: kept.map { CleanupItem(id: "cache:" + $0.0.app.path, label: $0.0.app.name, detail: "\($0.0.items.count) cache folder\($0.0.items.count == 1 ? "" : "s")", bytes: $0.1) },
+            items: kept.flatMap { request, _ in
+                request.items.map { CleanupItem(id: $0.path, label: $0.name, detail: (($0.path as NSString).deletingLastPathComponent as NSString).abbreviatingWithTildeInPath,
+                                                bytes: pathSizes[$0.path], group: request.app.name) }
+            },
             action: .clearAppCaches(kept.map(\.0)))
     }
 

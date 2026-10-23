@@ -45,6 +45,12 @@ final class DeepCleanModel {
     private(set) var steps: [ScanStep] = DeepCleanModel.freshSteps()
     private(set) var plan: [CleanupTask] = []
     var selected: Set<String> = []
+    /// Rows the user unticked inside a ticked task, by task id. Everything else in a ticked task is on.
+    private(set) var unticked: [String: Set<String>] = [:]
+    /// Everything running at scan time, grouped by app, for the "Running now" list.
+    private(set) var running: [RunningGroup] = []
+    /// Processes ticked in "Running now". Nothing is ticked by default.
+    var runningSelected: Set<Int32> = []
     private(set) var runs: [TaskRun] = []
     private(set) var before: Vitals?
     private(set) var finishedAt: Date?
@@ -82,7 +88,21 @@ final class DeepCleanModel {
         ]
     }
 
-    var selectedTasks: [CleanupTask] { plan.filter { selected.contains($0.id) } }
+    var selectedTasks: [CleanupTask] {
+        let tasks = plan.filter { selected.contains($0.id) }.compactMap { task in
+            task.keeping(Set(task.items.map(\.id)).subtracting(unticked[task.id] ?? []))
+        }
+        // A process another ticked task already stops isn't stopped twice.
+        var stopped = Set<Int32>()
+        for task in tasks {
+            switch task.action {
+            case .terminate(let targets): stopped.formUnion(targets.map(\.pid))
+            case .quitApps(let targets): stopped.formUnion(targets.map(\.pid))
+            default: break
+            }
+        }
+        return tasks + RunningProcesses.tasks(running, selected: runningSelected, excluding: stopped)
+    }
     var selectedDisk: Int64 { selectedTasks.compactMap(\.diskBytes).reduce(0, +) }
     var selectedMemory: Int64 { selectedTasks.compactMap(\.memoryBytes).reduce(0, +) }
     var freedTotal: Int64 { runs.compactMap { $0.outcome?.freedBytes }.reduce(0, +) }
@@ -92,10 +112,60 @@ final class DeepCleanModel {
         steps = Self.freshSteps()
         plan = []
         runs = []
+        running = []
+        runningSelected = []
+        unticked = [:]
     }
 
-    func selectRecommended() { selected = Set(plan.filter(\.recommended).map(\.id)) }
-    func selectAll() { selected = Set(plan.map(\.id)) }
+    func selectRecommended() {
+        selected = Set(plan.filter(\.recommended).map(\.id))
+        unticked = [:]
+    }
+
+    func selectAll() {
+        selected = Set(plan.map(\.id))
+        unticked = [:]
+    }
+
+    func selectNone() {
+        selected = []
+        unticked = [:]
+        runningSelected = []
+    }
+
+    // MARK: Ticks inside a task
+
+    func isOn(_ task: CleanupTask) -> Bool { selected.contains(task.id) }
+
+    func isOn(_ item: CleanupItem, in task: CleanupTask) -> Bool {
+        selected.contains(task.id) && !(unticked[task.id] ?? []).contains(item.id)
+    }
+
+    /// How many of the task's rows are ticked.
+    func tickedCount(_ task: CleanupTask) -> Int {
+        guard selected.contains(task.id) else { return 0 }
+        return task.items.count - (unticked[task.id] ?? []).intersection(task.items.map(\.id)).count
+    }
+
+    func setTask(_ task: CleanupTask, _ on: Bool) {
+        if on { selected.insert(task.id) } else { selected.remove(task.id) }
+        unticked[task.id] = nil
+    }
+
+    /// Ticks or unticks some rows. Ticking a row of an unticked task ticks the task with just those rows;
+    /// unticking its last row unticks the task.
+    func setItems(_ ids: [String], in task: CleanupTask, _ on: Bool) {
+        let all = Set(task.items.map(\.id))
+        var off = selected.contains(task.id) ? (unticked[task.id] ?? []) : all
+        if on { off.subtract(ids) } else { off.formUnion(ids) }
+        if off.isSuperset(of: all) {
+            selected.remove(task.id)
+            unticked[task.id] = nil
+        } else {
+            selected.insert(task.id)
+            unticked[task.id] = off.isEmpty ? nil : off
+        }
+    }
 
     // MARK: Scan
 
@@ -123,6 +193,8 @@ final class DeepCleanModel {
             guard let p = s.processes else { return "Couldn't read processes" }
             let findings = MemoryScanModel.findings(processes: p, simulators: app.snapshot.simulators, app: app)
             memoryFindings = findings
+            running = RunningProcesses.groups(p)
+            runningSelected = []
             let held = findings.compactMap(\.memoryBytes).reduce(0, +)
             return findings.isEmpty ? "Nothing worth freeing" : "\(findings.count) thing\(findings.count == 1 ? "" : "s") holding \(ByteSize.format(held))"
         }
