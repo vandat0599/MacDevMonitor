@@ -153,7 +153,10 @@ public enum Actions {
 
     /// Deletes build data and caches. Refuses paths outside `DeletionPolicy`; skips any folder a process is working in,
     /// any folder while an xcodebuild runs (checked right before each removal), and Claude session scratch folders used in the last day.
-    public static func deleteFolders(_ paths: [String], moveToTrash: Bool, policy: DeletionPolicy = DeletionPolicy()) async -> ActionOutcome {
+    public typealias BuildCheck = @Sendable () async -> [PSRow]?
+
+    public static func deleteFolders(_ paths: [String], moveToTrash: Bool, policy: DeletionPolicy = DeletionPolicy(),
+                                     buildCheck: BuildCheck = { await runningBuilds() }) async -> ActionOutcome {
         let refused = paths.filter { !policy.isAllowed($0) }
         guard refused.isEmpty else {
             return ActionOutcome(succeeded: false, summary: "Refused: not a build or cache folder", details: refused)
@@ -169,7 +172,12 @@ public enum Actions {
         var details: [String] = []
         for path in paths {
             let name = (path as NSString).lastPathComponent
-            guard let builds = await runningBuilds() else {
+            // Already gone (an earlier step removed the worktree or project holding it): nothing left to do.
+            guard FileManager.default.fileExists(atPath: path) else {
+                removed += 1
+                continue
+            }
+            guard let builds = await buildCheck() else {
                 details.append("Stopped: couldn't check for running builds.")
                 break
             }

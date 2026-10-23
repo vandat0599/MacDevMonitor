@@ -17,10 +17,16 @@ enum SnapshotRunner {
             }
             try? FileManager.default.createDirectory(atPath: outputDirectory, withIntermediateDirectories: true)
             for section in DashboardSection.allCases {
-                await render(SectionContent(section: section).environment(model), size: CGSize(width: 980, height: 1500),
+                let tall: Set<DashboardSection> = [.devTools, .applications]
+                await render(SectionContent(section: section).environment(model), size: CGSize(width: 980, height: tall.contains(section) ? 2600 : 1500),
                              to: "\(outputDirectory)/\(section.rawValue.replacingOccurrences(of: " ", with: "-")).png")
             }
             await render(MenuBarView().environment(model), size: CGSize(width: 360, height: 600), to: "\(outputDirectory)/MenuBar.png")
+            let detailName = ProcessInfo.processInfo.environment["MDM_SNAPSHOT_APP"] ?? "Android Studio"
+            if let app = model.snapshot.apps?.apps.first(where: { $0.name == detailName }) {
+                await render(AppDetail(app: app).environment(model).padding(16).background(.background.secondary), size: CGSize(width: 980, height: 700),
+                             to: "\(outputDirectory)/App-Detail.png")
+            }
             await model.permissions.refresh(repoRoots: model.settings.repoRoots)
             await render(PermissionsCard(startExpanded: true).environment(model).padding(24), size: CGSize(width: 980, height: 820),
                          to: "\(outputDirectory)/Permissions.png")

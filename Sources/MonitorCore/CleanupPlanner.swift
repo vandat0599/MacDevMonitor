@@ -29,11 +29,28 @@ public enum CleanupAction: Sendable, Hashable {
     case deleteRuntimes([String])
     case restartFseventsd
     case restartMac
+    case cleanDevCaches([String])
+    /// Project build folders chosen because the project was idle; re-checked just before deleting.
+    case deleteIdleArtifacts([String], idleDays: Double)
+    case docker([DockerCleanup])
+    case gitGC([String])
+    /// `path` picks the copy to quit when several share a bundle ID.
+    case quitApp(bundleID: String, name: String, path: String)
+    case uninstallApps([AppUninstallRequest])
+    /// Library data of apps (already gone, or caches), moved to the Trash.
+    case trashAppData([String])
 
     /// Stop processes before deleting what they hold; restart fseventsd after the deletes it would have to track; restart last.
     public var order: Int {
         switch self {
         case .terminate: 10
+        case .quitApp: 12
+        case .uninstallApps: 38
+        case .trashAppData: 42
+        case .deleteIdleArtifacts: 44
+        case .cleanDevCaches: 46
+        case .docker: 47
+        case .gitGC: 60
         case .shutdownSimulators: 20
         case .cleanWorktrees: 30
         case .removeWorktrees: 35
@@ -244,6 +261,9 @@ public enum CleanupPlanner {
             }
         }
 
+        tasks += devTasks(s, t, now)
+        tasks += appTasks(s, now)
+
         // MARK: Restart
         if let memory = s.memory {
             let days = memory.uptime(now: now) / 86_400
@@ -258,6 +278,162 @@ public enum CleanupPlanner {
                     safety: .restart, recommended: false, diskBytes: nil, memoryBytes: nil, items: [],
                     action: .restartMac))
             }
+        }
+        return tasks
+    }
+
+    // MARK: Developer tools
+
+    static func devTasks(_ s: MachineSnapshot, _ t: Thresholds, _ now: Date) -> [CleanupTask] {
+        var tasks: [CleanupTask] = []
+        func sum(_ values: [Int64?]) -> Int64? {
+            let known = values.compactMap { $0 }
+            return known.isEmpty ? nil : known.reduce(0, +)
+        }
+        func task(_ id: String, _ category: CleanupCategory, _ title: String, _ explanation: String, _ safety: CleanupSafety,
+                  _ recommended: Bool, disk: Int64? = nil, memory: Int64? = nil, _ items: [CleanupItem], _ action: CleanupAction) {
+            tasks.append(CleanupTask(id: id, category: category, title: title, explanation: explanation, safety: safety, recommended: recommended,
+                                     diskBytes: disk, memoryBytes: memory, items: items, action: action))
+        }
+
+        if let daemons = s.processes?.daemons {
+            if let docker = s.apps?.apps.first(where: { $0.identity.bundleID == "com.docker.docker" && $0.isRunning }) {
+                let vm = daemons.filter { $0.kind == .virtualMachine }
+                task("quit-docker", .memory, "Quit Docker Desktop", "Its Linux VM keeps gigabytes of RAM reserved while it runs. Containers stop until you open Docker again.",
+                     .interrupts, false, memory: sum(vm.map(\.footprint)),
+                     vm.map { CleanupItem(id: String($0.row.pid), label: $0.row.executableName, bytes: $0.footprint) },
+                     .quitApp(bundleID: docker.identity.bundleID!, name: docker.name, path: docker.path))
+            }
+            for (kind, id, title, explanation) in [
+                (DaemonKind.androidEmulator, "android-emulators", "Stop Android emulators", "Each emulator holds 2–4 GB of RAM. Apps running in them are stopped."),
+                (.database, "database-servers", "Stop local database servers", "Postgres, MySQL, Redis or MongoDB servers running on this Mac. Anything using them loses its connection."),
+                (.node, "node-processes", "Stop Node, Bun and Deno processes", "Dev servers, watchers and scripts. Check the list: some may be tools you're using right now."),
+            ] {
+                let group = daemons.filter { $0.kind == kind }
+                guard !group.isEmpty else { continue }
+                task(id, .memory, "\(title) (\(group.count))", explanation, .interrupts, false, memory: sum(group.map(\.footprint)),
+                     group.map { CleanupItem(id: String($0.row.pid), label: $0.row.executableName, detail: "PID \($0.row.pid) · \(ElapsedTime.format($0.row.elapsed)) · \($0.row.command)", bytes: $0.footprint) },
+                     .terminate(group.map { ProcessTarget(pid: $0.row.pid, command: $0.row.command) }))
+            }
+        }
+
+        guard let dev = s.dev else { return tasks }
+        // Sizes only where the amount freed is known; pnpm and conda decide for themselves.
+        func cacheItems(_ entries: [DevCacheEntry]) -> [CleanupItem] {
+            entries.map { CleanupItem(id: $0.spec.id, label: $0.spec.title, detail: $0.spec.ecosystem.rawValue + ($0.reclaimable == nil ? " · amount decided by the tool" : ""),
+                                      bytes: $0.reclaimable) }
+        }
+        let caches = dev.caches.filter { ($0.reclaimable ?? $0.size ?? 0) > 0 }
+        let junk = caches.filter(\.spec.recommended)
+        if !junk.isEmpty {
+            task("dev-junk", .disk, "Clean developer junk", "Homebrew's old versions and downloads, SwiftUI preview data, simulator and Xcode caches, device logs. All regenerate on their own.",
+                 .safe, true, disk: sum(junk.map(\.reclaimable)), cacheItems(junk), .cleanDevCaches(junk.map(\.spec.id)))
+        }
+        let packages = caches.filter { !$0.spec.recommended && $0.spec.id != "huggingface" }
+        if !packages.isEmpty {
+            task("package-caches", .disk, "Clear \(packages.count) package cache\(packages.count == 1 ? "" : "s")",
+                 "Downloads kept by npm, pip, Gradle, Cargo, CocoaPods and others. Safe to delete; the next install or build downloads them again.",
+                 .rebuilds, false, disk: sum(packages.map(\.reclaimable)), cacheItems(packages), .cleanDevCaches(packages.map(\.spec.id)))
+        }
+        if let models = caches.first(where: { $0.spec.id == "huggingface" }) {
+            task("ml-models", .disk, "Delete downloaded ML models", "Hugging Face models and datasets. They can be many GB and slow to download again.",
+                 .review, false, disk: models.size, cacheItems([models]), .cleanDevCaches(["huggingface"]))
+        }
+        if !dev.oldIDEFolders.isEmpty {
+            task("old-ide-versions", .disk, "Delete data from old IDE versions", "Caches and logs JetBrains IDEs and Android Studio left behind when they updated.",
+                 .safe, true, disk: sum(dev.oldIDEFolders.map(\.size)),
+                 dev.oldIDEFolders.map { CleanupItem(id: $0.path, label: $0.name, detail: ($0.path as NSString).deletingLastPathComponent, bytes: $0.size) },
+                 .deleteFolders(dev.oldIDEFolders.map(\.path)))
+        }
+        if !dev.oldCrashReports.isEmpty {
+            task("old-crash-reports", .disk, "Delete \(dev.oldCrashReports.count) old crash report\(dev.oldCrashReports.count == 1 ? "" : "s")",
+                 "Crash logs older than 30 days.", .safe, true, disk: sum(dev.oldCrashReports.map(\.size)),
+                 dev.oldCrashReports.map { CleanupItem(id: $0.path, label: $0.name, bytes: $0.size) }, .deleteFolders(dev.oldCrashReports.map(\.path)))
+        }
+        func artifactItems(_ list: [ProjectArtifact]) -> [CleanupItem] {
+            list.map { a in
+                CleanupItem(id: a.path, label: a.projectName + " · " + a.kind.rawValue,
+                            detail: a.idleDays(now: now).map { "untouched \(Int($0)) days · rebuild with \(a.kind.rebuildHint)" } ?? a.kind.rebuildHint, bytes: a.size)
+            }
+        }
+        // Virtualenvs can't always be rebuilt (no lockfile), so they never join the pre-ticked group.
+        let idle = dev.artifacts.filter { ($0.idleDays(now: now) ?? 0) >= 30 && $0.kind != .pythonVenv }
+        if !idle.isEmpty {
+            task("idle-project-builds", .disk, "Delete build folders of \(idle.count) idle project\(idle.count == 1 ? "" : "s")",
+                 "node_modules, Rust target, virtualenvs, Pods and other build output in projects nobody touched for 30+ days. Rebuilt by the project's install or build command.",
+                 .rebuilds, true, disk: sum(idle.map(\.size)), artifactItems(idle), .deleteIdleArtifacts(idle.map(\.path), idleDays: 30))
+        }
+        let active = dev.artifacts.filter { !idle.contains($0) }
+        if !active.isEmpty {
+            task("active-project-builds", .disk, "Delete build folders of \(active.count) active project\(active.count == 1 ? "" : "s")",
+                 "Projects changed in the last 30 days, and Python virtualenvs (which may not be rebuildable). Their next install or build starts from scratch.",
+                 .interrupts, false, disk: sum(active.map(\.size)), artifactItems(active), .deleteFolders(active.map(\.path)))
+        }
+        if dev.docker.state == .running {
+            let docker = dev.docker
+            func dockerTask(_ id: String, _ cleanup: DockerCleanup, _ bytes: Int64, _ explanation: String, _ safety: CleanupSafety, _ recommended: Bool) {
+                guard bytes > 0 else { return }
+                task(id, .disk, "Docker: remove \(cleanup.title.lowercased())", explanation, safety, recommended, disk: bytes,
+                     [CleanupItem(id: cleanup.rawValue, label: "docker " + cleanup.arguments.joined(separator: " "), bytes: bytes)], .docker([cleanup]))
+            }
+            dockerTask("docker-dangling", .danglingImages, docker.danglingImageBytes, "Untagged image layers left by rebuilds. Nothing uses them.", .safe, true)
+            dockerTask("docker-build-cache", .buildCache, docker.reclaimable("Build Cache"), "BuildKit's layer cache. The next docker build is slower.", .rebuilds, false)
+            dockerTask("docker-stopped-containers", .stoppedContainers, docker.reclaimable("Containers"),
+                       "Containers that exited. Anything written inside them (not in a volume) is lost.", .review, false)
+            dockerTask("docker-unused-images", .unusedImages, max(0, docker.reclaimable("Images") - docker.danglingImageBytes),
+                       "Every image no container uses, including ones you pulled on purpose. They're pulled again when needed.", .rebuilds, false)
+            dockerTask("docker-volumes", .unusedVolumes, docker.reclaimable("Local Volumes"),
+                       "Volumes no container is attached to. Databases and other data stored in them are deleted for good.", .review, false)
+        }
+        let repos = dev.git.filter(\.stats.needsMaintenance)
+        if !repos.isEmpty {
+            task("git-maintenance", .disk, "Pack \(repos.count) git repositor\(repos.count == 1 ? "y" : "ies")",
+                 "Runs `git gc`: packs loose objects and drops garbage. No history or branches are lost. Takes a minute per large repo.",
+                 .safe, false, disk: sum(repos.map(\.stats.reclaimableEstimate)),
+                 repos.map { CleanupItem(id: $0.repoPath, label: $0.name, detail: "\($0.stats.looseObjects) loose objects", bytes: $0.stats.reclaimableEstimate) },
+                 .gitGC(repos.map(\.repoPath)))
+        }
+        return tasks
+    }
+
+    // MARK: Applications
+
+    static func appTasks(_ s: MachineSnapshot, _ now: Date) -> [CleanupTask] {
+        guard let apps = s.apps else { return [] }
+        var tasks: [CleanupTask] = []
+        func sum(_ values: [Int64?]) -> Int64? {
+            let known = values.compactMap { $0 }
+            return known.isEmpty ? nil : known.reduce(0, +)
+        }
+        func orphanTask(_ id: String, _ categories: Set<LeftoverCategory>, _ title: String, _ explanation: String, _ safety: CleanupSafety, _ recommended: Bool) {
+            let list = apps.orphans.filter { categories.contains($0.category) }
+            guard !list.isEmpty else { return }
+            tasks.append(CleanupTask(id: id, category: .disk, title: title, explanation: explanation, safety: safety, recommended: recommended,
+                                     diskBytes: sum(list.map(\.size)), memoryBytes: nil,
+                                     items: list.map { CleanupItem(id: $0.path, label: $0.name, detail: $0.category.rawValue, bytes: $0.size) },
+                                     action: .trashAppData(list.map(\.path))))
+        }
+        orphanTask("orphan-app-state", [.savedState], "Remove saved windows of deleted apps",
+                   "Window-restore data apps leave behind. The apps are no longer installed.", .safe, true)
+        orphanTask("orphan-app-caches", [.caches, .webData], "Remove caches of deleted apps",
+                   "Caches and web data of apps that are no longer installed. Moved to the Trash.", .rebuilds, true)
+        orphanTask("orphan-app-data", [.containers, .applicationSupport, .preferences], "Remove data of deleted apps",
+                   "Settings, app data and sandbox containers of apps that are gone. May hold documents you saved inside those apps, so check the list; it's moved to the Trash.",
+                   .review, false)
+
+        let unused = apps.apps.filter { app in
+            !app.isProtected && !app.isRunning && app.path != Bundle.main.bundlePath && (app.unusedDays(now: now) ?? 0) >= 90
+        }
+        if !unused.isEmpty {
+            let requests = unused.map { app in
+                AppUninstallRequest(app: app, items: apps.leftovers(for: app).filter { $0.match.strength == .strong })
+            }
+            tasks.append(CleanupTask(
+                id: "unused-apps", category: .disk, title: "Uninstall \(unused.count) app\(unused.count == 1 ? "" : "s") unused for 90+ days",
+                explanation: "Each app and everything it left in your Library, moved to the Trash. Review each one in Applications first if unsure.",
+                safety: .review, recommended: false, diskBytes: sum(unused.map(\.size)), memoryBytes: nil,
+                items: unused.map { CleanupItem(id: $0.path, label: $0.name, detail: "last opened \(Int($0.unusedDays(now: now) ?? 0)) days ago", bytes: $0.size) },
+                action: .uninstallApps(requests)))
         }
         return tasks
     }

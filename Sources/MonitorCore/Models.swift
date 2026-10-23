@@ -59,16 +59,28 @@ public enum DaemonKind: String, Sendable, CaseIterable {
     case simulator = "Simulator"
     case gradle = "Gradle daemon"
     case kotlin = "Kotlin daemon"
+    case androidEmulator = "Android emulator"
+    case virtualMachine = "Docker & VMs"
+    case database = "Database server"
+    case node = "Node, Bun & Deno"
     case claude = "Claude CLI"
+
+    static let databaseNames: Set<String> = ["postgres", "mysqld", "mariadbd", "redis-server", "mongod", "clickhouse-server", "memcached"]
+    static let vmNames: Set<String> = ["com.docker.backend", "com.docker.virtualization", "com.docker.hyperkit", "limactl", "colima", "OrbStack Helper"]
 
     public static func classify(_ row: PSRow) -> DaemonKind? {
         let command = row.command
+        let name = row.executableName
         if command.contains("GradleDaemon") { return .gradle }
         if command.contains("KotlinCompileDaemon") { return .kotlin }
         if command.contains("SourceKitService") { return .sourceKit }
-        if command.contains("Simulator.app/Contents/MacOS/Simulator") || row.executableName == "launchd_sim" { return .simulator }
-        if ["xcodebuild", "XCBBuildService", "SWBBuildService"].contains(row.executableName) { return .xcodeBuild }
-        if row.executableName == "claude" { return .claude }
+        if (command.contains("qemu-system") && command.contains("-avd")) || name.hasPrefix("emulator") { return .androidEmulator }
+        if command.contains("Simulator.app/Contents/MacOS/Simulator") || name == "launchd_sim" { return .simulator }
+        if name.contains("com.apple.Virtualization.VirtualMachine") || vmNames.contains(name) || command.contains("qemu-system") { return .virtualMachine }
+        if databaseNames.contains(name) { return .database }
+        if ["xcodebuild", "XCBBuildService", "SWBBuildService"].contains(name) { return .xcodeBuild }
+        if name == "claude" { return .claude }
+        if ["node", "bun", "deno"].contains(name) { return .node }
         return nil
     }
 }
@@ -277,6 +289,8 @@ public struct MachineSnapshot: Sendable {
     public var derivedData: [DerivedDataEntry]?
     public var simulators: SimulatorSnapshot?
     public var storage: StorageSnapshot?
+    public var dev: DevSnapshot?
+    public var apps: AppsSnapshot?
 
     public init() {}
 }

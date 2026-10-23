@@ -34,12 +34,14 @@ public enum Shell {
 
     /// Runs an executable off the main thread, draining both pipes so large outputs can't deadlock it.
     /// On timeout it sends SIGTERM, then SIGKILL, and gives up waiting after that, so a hung command never blocks a scan.
-    public static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval = 120) async throws -> Result {
+    public static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval = 120,
+                           environment: [String: String]? = nil) async throws -> Result {
         try await withCheckedThrowingContinuation { continuation in
             let once = Once()
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
+            if let environment { process.environment = environment }
             process.standardInput = FileHandle.nullDevice
             let outPipe = Pipe()
             let errPipe = Pipe()
@@ -89,8 +91,9 @@ public enum Shell {
 
     /// Like `run`, but throws with stderr when the command exits non-zero.
     @discardableResult
-    public static func check(_ executable: String, _ arguments: [String], timeout: TimeInterval = 120) async throws -> String {
-        let result = try await run(executable, arguments, timeout: timeout)
+    public static func check(_ executable: String, _ arguments: [String], timeout: TimeInterval = 120,
+                             environment: [String: String]? = nil) async throws -> String {
+        let result = try await run(executable, arguments, timeout: timeout, environment: environment)
         guard result.succeeded else {
             let message = result.error.trimmingCharacters(in: .whitespacesAndNewlines)
             throw Failure(message: message.isEmpty ? "\((executable as NSString).lastPathComponent) exited with \(result.status)" : message)

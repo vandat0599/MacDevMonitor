@@ -23,6 +23,8 @@ enum PendingAction: Hashable {
     case deleteRuntime(identifier: String, name: String, size: Int64)
     case shutdownSimulators
     case fixAllSafe([FixAction])
+    /// Any Deep Clean action run from a page, with the confirmation text the page wrote.
+    case cleanup(CleanupAction, title: String, detail: String, confirmLabel: String)
 }
 
 struct Confirmation: Identifiable {
@@ -122,6 +124,9 @@ final class AppModel {
         async let derivedData = DerivedDataReader.read(repoRoots: roots, includeSizes: true, sizeMaxAge: forceSizes ? 0 : 2 * 3600)
         async let simulators = try? SimulatorReader.read()
         async let storage = StorageReader.read(includeSizes: true, sizeMaxAge: forceSizes ? 0 : 6 * 3600)
+        async let dev = DevCacheReader.snapshot(repoRoots: roots, repos: await WorktreeReader.repositories(under: roots),
+                                                sizeMaxAge: forceSizes ? 0 : 6 * 3600)
+        async let apps = Self.readApps(sizeMaxAge: forceSizes ? 0 : 6 * 3600)
 
         if let processes = await processes { snapshot.processes = processes }
         snapshot.memory = MemoryReader.read()
@@ -134,8 +139,22 @@ final class AppModel {
         snapshot.derivedData = await derivedData
         reevaluate()
         snapshot.storage = await storage
+        reevaluate()
+        snapshot.dev = await dev
+        snapshot.apps = await apps
         lastFullScan = Date()
         reevaluate()
+    }
+
+    /// Installed apps, every Library location listed once, and data left by apps that are gone.
+    nonisolated static func readApps(sizeMaxAge: TimeInterval) async -> AppsSnapshot {
+        let apps = await AppCatalogReader.read(includeSizes: true, sizeMaxAge: sizeMaxAge)
+        let listing = await LeftoverListing.read()
+        let canReadContainers = FullDiskAccess.isGranted
+        let orphans = await OrphanedAppDataFinder.find(listing: listing, installed: apps, canReadContainers: canReadContainers) {
+            !NSWorkspace.shared.urlsForApplications(withBundleIdentifier: $0).isEmpty
+        }
+        return AppsSnapshot(apps: apps, listing: listing, orphans: orphans, canReadContainers: canReadContainers)
     }
 
     /// Takes the slow sections from a scan Deep Clean just finished, so every page shows them. Memory, disk and processes
@@ -145,6 +164,8 @@ final class AppModel {
         snapshot.derivedData = scanned.derivedData
         snapshot.simulators = scanned.simulators
         snapshot.storage = scanned.storage
+        snapshot.dev = scanned.dev
+        snapshot.apps = scanned.apps
         lastFullScan = Date()
         await refreshFast(includeProcesses: true)
     }
@@ -226,6 +247,8 @@ final class AppModel {
             return Confirmation(title: "Delete runtime \(name)?", message: "Frees about \(ByteSize.format(size)). Simulators that use it stop working until you download it again in Xcode.", confirmLabel: "Delete", destructive: true, action: action)
         case .shutdownSimulators:
             return Confirmation(title: "Shut down all simulators?", message: "Any app running in a simulator is stopped.", confirmLabel: "Shut Down", destructive: false, action: action)
+        case .cleanup(_, let title, let detail, let confirmLabel):
+            return Confirmation(title: title, message: detail, confirmLabel: confirmLabel, destructive: true, action: action)
         case .fixAllSafe(let fixes):
             let lines = fixes.map { "• " + Self.summary(of: $0) }.joined(separator: "\n")
             return Confirmation(title: "Fix \(fixes.count) safe issue\(fixes.count == 1 ? "" : "s")?", message: "These only touch leftovers, never work in progress:\n\n" + lines, confirmLabel: "Fix All", destructive: true, action: action)
@@ -288,6 +311,8 @@ final class AppModel {
             await run("Deleting runtime") { await Actions.deleteRuntime(identifier: identifier, freeing: size) }
         case .shutdownSimulators:
             await run("Shutting down simulators") { await Actions.shutdownAllSimulators() }
+        case .cleanup(let cleanup, let title, _, _):
+            await run(title.replacingOccurrences(of: "?", with: "")) { await self.executeCleanup(cleanup, sizeHint: nil) }
         }
         await refreshFast(includeProcesses: true)
         await refreshFull()
@@ -347,7 +372,42 @@ final class AppModel {
             return Self.combine(outcomes, summary: "Deleted \(outcomes.filter(\.succeeded).count) of \(ids.count) runtimes")
         case .restartFseventsd: return await Actions.restartFseventsd()
         case .restartMac: return await Actions.restartMac()
+        case .cleanDevCaches(let ids): return await DevActions.cleanCaches(ids)
+        case .deleteIdleArtifacts(let paths, let idleDays): return await DevActions.deleteIdleArtifacts(paths, idleDays: idleDays, moveToTrash: trash)
+        case .docker(let cleanups): return await DevActions.docker(cleanups)
+        case .gitGC(let repos): return await DevActions.gitGC(repos)
+        case .quitApp(let bundleID, let name, let path): return await quitApp(bundleID: bundleID, name: name, path: path)
+        case .trashAppData(let paths): return await AppUninstaller.trashOrphans(paths)
+        case .uninstallApps(let requests):
+            var outcomes: [ActionOutcome] = []
+            for request in requests { outcomes.append(await uninstall(request)) }
+            return Self.combine(outcomes, summary: "Uninstalled \(outcomes.filter(\.succeeded).count) of \(requests.count) apps")
         }
+    }
+
+    /// Asks the app to quit the normal way (it can save or ask first), waiting up to 20 seconds.
+    func quitApp(bundleID: String, name: String, path: String) async -> ActionOutcome {
+        let real = CwdParser.realPath(path)
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).filter { app in
+            app.bundleURL.map { CwdParser.realPath($0.path) == real } ?? false
+        }
+        guard !running.isEmpty else { return ActionOutcome(succeeded: true, summary: "\(name) wasn't running") }
+        running.forEach { $0.terminate() }
+        for _ in 0..<40 where !running.allSatisfy(\.isTerminated) {
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        let quit = running.allSatisfy(\.isTerminated)
+        return ActionOutcome(succeeded: quit, summary: quit ? "Quit \(name)" : "\(name) is still running",
+                             details: quit ? [] : ["It may be waiting for you to save or confirm something in its window."])
+    }
+
+    /// Quits the app if it's running, then deep-uninstalls it.
+    func uninstall(_ request: AppUninstallRequest) async -> ActionOutcome {
+        if request.app.isRunning, let bundleID = request.app.identity.bundleID {
+            let quit = await quitApp(bundleID: bundleID, name: request.app.name, path: request.app.path)
+            guard quit.succeeded else { return quit }
+        }
+        return await AppUninstaller.uninstall(request)
     }
 
     private static func combine(_ outcomes: [ActionOutcome], summary: String) -> ActionOutcome {

@@ -72,6 +72,11 @@ final class DeepCleanModel {
             ScanStep(id: "build", title: "Xcode build data", checks: "DerivedData in Xcode's folder, /tmp copies and folders inside repos", symbol: "hammer"),
             ScanStep(id: "simulators", title: "Simulators", checks: "Unusable and running simulators, unused iOS runtimes", symbol: "iphone"),
             ScanStep(id: "caches", title: "Caches & temp folders", checks: "Old iOS device symbols and Claude session scratch folders", symbol: "folder"),
+            ScanStep(id: "devtools", title: "Developer tool caches", checks: "npm, Yarn, pnpm, pip, uv, Gradle, Maven, Cargo, Go, CocoaPods, Homebrew, IDE caches", symbol: "wrench.and.screwdriver"),
+            ScanStep(id: "projects", title: "Project build folders", checks: "node_modules, Rust target, virtualenvs, Pods, .next, Gradle/Flutter build in your repos", symbol: "shippingbox"),
+            ScanStep(id: "docker", title: "Docker", checks: "Images, containers, volumes and build cache", symbol: "cube.transparent"),
+            ScanStep(id: "git", title: "Git repositories", checks: "Loose objects and garbage that `git gc` can pack", symbol: "point.3.connected.trianglepath.dotted"),
+            ScanStep(id: "apps", title: "Applications", checks: "Apps unused for 90+ days and data left by apps you've deleted", symbol: "square.grid.2x2"),
             ScanStep(id: "disk", title: "Disk space", checks: "Free space on the startup disk", symbol: "internaldrive"),
         ]
     }
@@ -139,6 +144,42 @@ final class DeepCleanModel {
             s.storage = storage
             let size = storage.items.filter { $0.kind == .deviceSupport || $0.kind == .claudeTemp }.compactMap(\.size).reduce(0, +)
             return "\(ByteSize.format(size)) in device symbols and Claude temp folders"
+        }
+        var caches: [DevCacheEntry] = []
+        var ide: [DevFolderEntry] = []
+        var artifacts: [ProjectArtifact] = []
+        var docker = DockerStatus(state: .notInstalled)
+        var git: [GitRepoHealth] = []
+        await step("devtools") {
+            caches = await DevCacheReader.read(sizeMaxAge: 600)
+            ide = await DevCacheReader.oldIDEFolders(sizeMaxAge: 600)
+            let total = caches.compactMap { $0.reclaimable ?? $0.size }.reduce(0, +) + ide.compactMap(\.size).reduce(0, +)
+            return "\(caches.count) tool caches found · \(ByteSize.format(total)) · \(ide.count) old IDE version folders"
+        }
+        await step("projects") {
+            artifacts = await ProjectArtifactScanner.read(roots: roots, includeSizes: true, sizeMaxAge: 600)
+            let idle = artifacts.filter { ($0.idleDays() ?? 0) >= 30 }
+            return "\(artifacts.count) build folders · \(ByteSize.format(artifacts.compactMap(\.size).reduce(0, +))) · \(idle.count) in idle projects"
+        }
+        await step("docker") {
+            docker = await DockerReader.read()
+            switch docker.state {
+            case .notInstalled: return "Not installed"
+            case .notRunning: return "Installed, not running" + (docker.vmDiskBytes.map { " · VM disk \(ByteSize.format($0))" } ?? "")
+            case .running: return docker.usage.map { "\($0.type) \(ByteSize.format($0.size))" }.joined(separator: " · ")
+            }
+        }
+        await step("git") {
+            git = await GitReader.read(repos: await WorktreeReader.repositories(under: roots), includeSizes: true)
+            return "\(git.count) repos · \(git.filter(\.stats.needsMaintenance).count) could be packed"
+        }
+        s.dev = DevSnapshot(caches: caches, oldIDEFolders: ide, oldCrashReports: DevCacheReader.oldCrashReports(),
+                            artifacts: artifacts, docker: docker, git: git)
+        await step("apps") {
+            let apps = await AppModel.readApps(sizeMaxAge: 600)
+            s.apps = apps
+            let unused = apps.apps.filter { !$0.isProtected && ($0.unusedDays() ?? 0) >= 90 }
+            return "\(apps.apps.count) apps · \(unused.count) unused for 90+ days · \(apps.orphans.count) leftovers of deleted apps"
         }
         await step("disk") {
             let disk = DiskReader.read()

@@ -6,6 +6,8 @@ enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
     case deepClean = "Deep Clean"
     case memory = "Memory"
     case processes = "Processes"
+    case devTools = "Dev Tools"
+    case applications = "Applications"
     case worktrees = "Worktrees"
     case buildData = "Build Data"
     case simulators = "Simulators"
@@ -20,6 +22,8 @@ enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
         case .deepClean: "sparkles"
         case .memory: "memorychip"
         case .processes: "cpu"
+        case .devTools: "wrench.and.screwdriver"
+        case .applications: "square.grid.2x2"
         case .worktrees: "arrow.triangle.branch"
         case .buildData: "hammer"
         case .simulators: "iphone"
@@ -31,7 +35,7 @@ enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
     /// Issue id prefixes shown as this section's badge.
     var issueIDs: [String] {
         switch self {
-        case .overview, .deepClean, .activity: []
+        case .overview, .deepClean, .activity, .devTools, .applications: []
         case .memory: ["fseventsd", "free-memory", "swap", "uptime", "large-"]
         case .processes: ["stuck", "zombies"]
         case .worktrees: ["worktrees"]

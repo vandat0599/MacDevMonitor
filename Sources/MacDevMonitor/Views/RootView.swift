@@ -52,6 +52,8 @@ struct SectionContent: View {
         case .deepClean: DeepCleanView()
         case .memory: MemoryView()
         case .processes: ProcessesView()
+        case .devTools: DevToolsView()
+        case .applications: ApplicationsView()
         case .worktrees: WorktreesView()
         case .buildData: BuildDataView()
         case .simulators: SimulatorsView()

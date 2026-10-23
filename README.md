@@ -16,6 +16,43 @@ bash scripts/bundle.sh
 This builds a release binary, wraps it in `Mac Dev Monitor.app` with an icon, signs it ad hoc and copies it to
 `~/Applications`. Open it from there. Use `--no-install` to only build `dist/Mac Dev Monitor.app`.
 
+## Dev Tools
+
+Every common stack, in one page:
+
+| Stack | Scanned |
+|---|---|
+| JavaScript & Node | npm, Yarn, pnpm store (`pnpm store prune`), Bun, Corepack, Deno, node-gyp, Electron, Playwright, Cypress, Puppeteer |
+| Python | pip, uv, Poetry cache (never its virtualenvs), conda (`conda clean`), Hugging Face models |
+| Java, Kotlin & Android | Gradle caches/distributions/daemon logs, Maven, Android tool cache, old Android Studio versions |
+| Rust · Go · Ruby · Dart · .NET | Cargo registry, Go build/module cache (`go clean`), CocoaPods, Bundler, Pub, NuGet |
+| Homebrew | `brew cleanup --prune=all` with its own dry-run estimate |
+| Xcode extras | SwiftUI previews, simulator caches, Xcode caches, device logs |
+| Editors | VS Code and Cursor caches, old JetBrains versions |
+| Project build folders | `node_modules`, Rust `target`, virtualenvs, `Pods`, `.next`, `.dart_tool`, Gradle/Flutter `build`, `.gradle`, SwiftPM `.build` — each only when its project file sits next to it; idle = no change for 30 days |
+| Docker | `docker system df`; prune dangling images, build cache, stopped containers, unused images, unused volumes |
+| Git | repos with many loose objects → `git gc` |
+| Running | Docker/VMs, Android emulators, database servers, Node/Bun/Deno, Gradle/Kotlin daemons |
+
+Caches are deleted outright (a cache in the Trash frees nothing); tools with their own cleanup (brew, pnpm, conda, go) run it.
+
+## Applications
+
+Every app in `/Applications`, `~/Applications` and the system folders, with size, version, last opened (Spotlight),
+source (Apple / App Store / Homebrew / downloaded) and running state. Each row opens a **Where it lives** dropdown:
+the app plus every match in ~/Library and /Library (app data, caches, preferences, sandbox and shared containers, saved
+state, logs, crash reports, web data, launch agents and daemons, privileged helpers, plug-ins), vendor folders
+(`Application Support/Google/AndroidStudio…`), home dot-folders (`~/.vscode`), installer receipts and the Homebrew cask —
+each with size, why it matched, and Reveal in Finder.
+
+**Deep uninstall** quits the app, unloads its launch agents/daemons and moves everything ticked to the **Trash**
+(recoverable); root-owned items go through one administrator prompt (`mv` into your Trash, `pkgutil --forget`).
+Matches that could be shared (same developer, `~/.android`, `~/.docker`) start unticked. Credentials folders (`~/.ssh`,
+`~/.aws`, …) are never offered. Apps in `/System/Applications` (and Safari) are protected by macOS and can't be removed by any app.
+
+Deep Clean also finds data left by apps you already deleted — only sandbox containers and saved window states (which only
+apps create), plus other entries with the same bundle ID, so command-line tool caches are never mistaken for leftovers.
+
 ## Deep Clean
 
 One button (menu bar, Overview, or the Deep Clean page) that makes the Mac fresh again:
