@@ -12,6 +12,7 @@ enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
     case buildData = "Build Data"
     case simulators = "Simulators"
     case storage = "Storage"
+    case systemStorage = "System Storage"
     case activity = "Activity"
 
     var id: String { rawValue }
@@ -28,6 +29,7 @@ enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
         case .buildData: "hammer"
         case .simulators: "iphone"
         case .storage: "internaldrive"
+        case .systemStorage: "chart.pie"
         case .activity: "clock.arrow.circlepath"
         }
     }
@@ -35,7 +37,7 @@ enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
     /// Issue id prefixes shown as this section's badge.
     var issueIDs: [String] {
         switch self {
-        case .overview, .deepClean, .activity, .devTools, .applications: []
+        case .overview, .deepClean, .activity, .devTools, .applications, .systemStorage: []
         case .memory: ["fseventsd", "free-memory", "swap", "uptime", "large-"]
         case .processes: ["stuck", "zombies"]
         case .worktrees: ["worktrees"]

@@ -38,7 +38,8 @@ public enum SizeReader {
     public static func size(of path: String, maxAge: TimeInterval = 0) async -> Int64? {
         guard FileManager.default.fileExists(atPath: path) else { return nil }
         if let cached = await cache.size(of: path, maxAge: maxAge) { return cached }
-        guard let result = try? await Shell.run("/usr/bin/du", ["-sk", path], timeout: 300),
+        // -x: a mounted disk image inside the folder isn't space the folder uses.
+        guard let result = try? await Shell.run("/usr/bin/du", ["-skx", path], timeout: 300),
               let kilobytes = result.output.split(separator: "\t").first.flatMap({ Int64($0) })
         else { return nil }
         await cache.store(kilobytes * 1024, for: path)

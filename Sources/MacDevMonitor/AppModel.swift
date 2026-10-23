@@ -46,6 +46,7 @@ final class AppModel {
     let deepClean = DeepCleanModel()
     let permissions = PermissionsModel()
     let memoryScan = MemoryScanModel()
+    let systemStorage = SystemStorageModel()
     private var growthTracker = GrowthTracker(window: 600)
     /// Bytes each process grew over the last ten minutes.
     private(set) var growth: [Int32: Int64] = [:]

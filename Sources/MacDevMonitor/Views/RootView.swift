@@ -58,6 +58,7 @@ struct SectionContent: View {
         case .buildData: BuildDataView()
         case .simulators: SimulatorsView()
         case .storage: StorageView()
+        case .systemStorage: SystemStorageView()
         case .activity: ActivityView()
         }
     }

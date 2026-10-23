@@ -267,12 +267,12 @@ public enum Actions {
 
     // MARK: Live checks
 
-    private static func processList() async -> [PSRow]? {
+    static func processList() async -> [PSRow]? {
         guard let output = try? await Shell.check("/bin/ps", ["-axo", "pid=,ppid=,etime=,stat=,command="], timeout: 30) else { return nil }
         return PSParser.parse(output)
     }
 
-    private static func workingDirectories() async -> [CwdParser.Entry]? {
+    static func workingDirectories() async -> [CwdParser.Entry]? {
         // lsof exits 1 when some processes can't be inspected, but still prints the rest.
         guard let result = try? await Shell.run("/usr/sbin/lsof", ["-d", "cwd", "-F", "pn"], timeout: 60),
               !result.output.isEmpty else { return nil }
