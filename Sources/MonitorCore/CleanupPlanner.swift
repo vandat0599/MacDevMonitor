@@ -41,12 +41,20 @@ public enum CleanupAction: Sendable, Hashable {
     case uninstallApps([AppUninstallRequest])
     /// Library data of apps (already gone, or caches), moved to the Trash.
     case trashAppData([String])
+    /// Installed apps' cache folders, deleted (apps rebuild them).
+    case clearAppCaches([AppCacheRequest])
+    /// Items from the Storage page, removed the way each one says.
+    case removeStorage([StorageEntry])
 
     /// Stop processes before deleting what they hold; restart fseventsd after the deletes it would have to track; restart last.
     public var order: Int {
         switch self {
         case .terminate: 10
         case .quitApp, .quitApps: 12
+        // Empty the Trash before anything else goes into it, so it never takes what this clean just trashed.
+        case .removeStorage(let entries) where entries.contains { $0.removal == .emptyTrash }: 5
+        case .removeStorage: 48
+        case .clearAppCaches: 43
         case .uninstallApps: 38
         case .trashAppData: 42
         case .deleteIdleArtifacts: 44
@@ -96,7 +104,8 @@ public struct CleanupTask: Sendable, Hashable, Identifiable {
 }
 
 public enum CleanupPlanner {
-    public static func plan(_ s: MachineSnapshot, thresholds t: Thresholds, now: Date = Date()) -> [CleanupTask] {
+    /// `memoryFindings` (the Memory page's scan) replaces the planner's own memory tasks when given.
+    public static func plan(_ s: MachineSnapshot, thresholds t: Thresholds, now: Date = Date(), memoryFindings: [CleanupTask]? = nil) -> [CleanupTask] {
         var tasks: [CleanupTask] = []
         func idle(_ date: Date?, days: Double) -> Bool { date.map { now.timeIntervalSince($0) > days * 86_400 } ?? false }
         func name(_ path: String) -> String { (path as NSString).lastPathComponent }
@@ -263,8 +272,17 @@ public enum CleanupPlanner {
             }
         }
 
+        if let memoryFindings {
+            tasks = memoryFindings + tasks.filter { $0.category != .memory }
+        }
+
         tasks += devTasks(s, t, now)
         tasks += appTasks(s, now)
+        if let storage = s.systemStorage {
+            // Anything another task already offers (dev caches, app caches, build folders) is left out, so nothing counts twice.
+            let covered = coveredPaths(tasks).union(DevCacheCatalog.allPaths(home: NSHomeDirectory()))
+            tasks += storageTasks(storage, excluding: covered)
+        }
 
         // MARK: Restart
         if let memory = s.memory {
@@ -423,6 +441,11 @@ public enum CleanupPlanner {
                    "Settings, app data and sandbox containers of apps that are gone. May hold documents you saved inside those apps, so check the list; it's moved to the Trash.",
                    .review, false)
 
+        let clearable = apps.apps.filter { !$0.isProtected && !$0.isRunning && $0.path != Bundle.main.bundlePath }
+        if let caches = appCacheTask(clearable.map { AppCacheRequest(app: $0, items: apps.caches(for: $0)) }, pathSizes: apps.cachePathSizes) {
+            tasks.append(caches)
+        }
+
         let unused = apps.apps.filter { app in
             !app.isProtected && !app.isRunning && app.path != Bundle.main.bundlePath && (app.unusedDays(now: now) ?? 0) >= 90
         }
@@ -438,6 +461,59 @@ public enum CleanupPlanner {
                 action: .uninstallApps(requests)))
         }
         return tasks
+    }
+
+    /// The Storage page's removable items as Deep Clean tasks, one or two per group: the easy ones (safe, rebuilt, no password)
+    /// and the ones to check. Temp and developer folders are left out: Deep Clean has its own, more careful tasks for those.
+    public static func storageTasks(_ storage: SystemStorageSnapshot, excluding covered: Set<String>) -> [CleanupTask] {
+        let skipped: Set<StorageGroupID> = [.tempFiles, .developer, .macOSCore, .systemAssets]
+        var tasks: [CleanupTask] = []
+        for group in storage.groups where !skipped.contains(group.id) {
+            let offered = group.entries.filter { entry in entry.canRemove && !entry.removal.paths.contains(where: covered.contains) }
+            let easy = offered.filter { [.safe, .rebuilds].contains($0.risk) && !$0.removal.needsPassword }
+            let check = offered.filter { entry in !easy.contains(entry) }
+            func task(_ entries: [StorageEntry], suffix: String, title: String, safety: CleanupSafety, recommended: Bool) {
+                guard !entries.isEmpty else { return }
+                let known = entries.compactMap(\.size)
+                tasks.append(CleanupTask(
+                    id: "storage-\(group.id.rawValue)\(suffix)", category: .disk, title: title, explanation: group.id.summary,
+                    safety: safety, recommended: recommended, diskBytes: known.isEmpty ? nil : known.reduce(0, +), memoryBytes: nil,
+                    items: entries.map { CleanupItem(id: $0.id, label: $0.title, detail: "\($0.risk.rawValue) · \($0.riskReason)", bytes: $0.size) },
+                    action: .removeStorage(entries)))
+            }
+            let count = { (n: Int) in "\(n) item\(n == 1 ? "" : "s")" }
+            // AI models download again on their own, so they're offered but never pre-ticked.
+            task(easy, suffix: "", title: "\(group.id.title): \(count(easy.count))",
+                 safety: easy.allSatisfy { $0.risk == .safe } ? .safe : .rebuilds, recommended: group.id != .aiModels)
+            task(check, suffix: "-check", title: "\(group.id.title): \(count(check.count)) to check",
+                 safety: check.contains { $0.removal.needsPassword } ? .password : .review, recommended: false)
+        }
+        return tasks
+    }
+
+    /// Every path some task would act on: its rows, plus folders inside actions whose rows are summaries (app caches).
+    public static func coveredPaths(_ tasks: [CleanupTask]) -> Set<String> {
+        var paths = Set(tasks.flatMap { $0.items.map(\.id) })
+        for task in tasks {
+            if case .clearAppCaches(let requests) = task.action { paths.formUnion(requests.flatMap { $0.items.map(\.path) }) }
+            if case .uninstallApps(let requests) = task.action { paths.formUnion(requests.flatMap { $0.items.map(\.path) }) }
+        }
+        return paths
+    }
+
+    /// Installed apps' caches as one task. Only their cache folders: Xcode's DerivedData and other build data stay with the build tasks.
+    public static func appCacheTask(_ requests: [AppCacheRequest], pathSizes: [String: Int64]) -> CleanupTask? {
+        let trimmed = requests.map { AppCacheRequest(app: $0.app, items: $0.items.filter { [.caches, .hiddenCaches].contains($0.category) }) }
+            .filter { !$0.items.isEmpty }
+        let bytes = trimmed.map { request in request.items.compactMap { pathSizes[$0.path] }.reduce(0, +) }
+        let kept = zip(trimmed, bytes).filter { $0.1 >= 1 << 20 }
+        guard !kept.isEmpty else { return nil }
+        return CleanupTask(
+            id: "app-caches", category: .disk, title: "Clear caches of \(kept.count) app\(kept.count == 1 ? "" : "s")",
+            explanation: "Cache folders of apps that aren't running. Settings, logins and documents stay; apps rebuild caches as they need them, so they may open a little slower once.",
+            safety: .rebuilds, recommended: false, diskBytes: kept.map(\.1).reduce(0, +), memoryBytes: nil,
+            items: kept.map { CleanupItem(id: "cache:" + $0.0.app.path, label: $0.0.app.name, detail: "\($0.0.items.count) cache folder\($0.0.items.count == 1 ? "" : "s")", bytes: $0.1) },
+            action: .clearAppCaches(kept.map(\.0)))
     }
 
     public static func executionOrder(_ tasks: [CleanupTask]) -> [CleanupTask] {

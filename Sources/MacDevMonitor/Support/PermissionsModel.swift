@@ -65,7 +65,7 @@ final class PermissionsModel {
             required: false, status: await Self.automationStatus(ask: false)))
         list.append(PermissionItem(
             kind: .fullDiskAccess, title: "Full Disk Access", symbol: "lock.shield",
-            why: "Lets size scans see into protected caches so totals aren't under-counted. Nothing else uses it. macOS only lets you grant it in System Settings.",
+            why: "Required by the Storage page, and lets every scan see into Mail, Messages, backups, the Trash and other apps' data so totals aren't under-counted. macOS only lets you grant it in System Settings.",
             required: false, status: Self.fullDiskAccessStatus()))
         list.append(PermissionItem(
             kind: .loginItem, title: "Open at login", symbol: "power",

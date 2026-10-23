@@ -153,7 +153,8 @@ public enum CacheEntries {
     public static func classify(name: String) -> CacheInfo {
         if name == "org.swift.swiftpm" {
             return CacheInfo(title: "Swift Package Manager cache", detail: "Downloaded Swift packages, shared by every project.",
-                             riskReason: "Packages download again on the next build.", owner: .developer, risk: .rebuilds, removable: true)
+                             riskReason: "Packages download again on the next build, but a build resolving packages right now would fail.",
+                             owner: .developer, risk: .caution, removable: true)
         }
         if name == "JetBrains" {
             return CacheInfo(title: "JetBrains IDEs", detail: "Caches and indexes for IntelliJ-based IDEs.",
@@ -164,6 +165,11 @@ public enum CacheEntries {
             return CacheInfo(title: name, detail: "Cached files kept by a macOS service (\(name)).",
                              riskReason: "macOS trims these itself. Deleting one under a running service (iCloud, downloads) can lose work or force a full re-sync.",
                              owner: .macOS, risk: .caution, removable: false)
+        }
+        if !name.contains(".") {
+            // A company folder ("Google", "Microsoft") holds caches of several apps; this can't tell whether one is running.
+            return CacheInfo(title: name, detail: "Cached files kept by \(name)'s apps.",
+                             riskReason: "Shared by this developer's apps. Quit them before deleting.", owner: .app, risk: .caution, removable: true)
         }
         return CacheInfo(title: name, detail: "Cached files kept by \(name).",
                          riskReason: "A cache: the app downloads or recreates what it needs. Quit the app first.",

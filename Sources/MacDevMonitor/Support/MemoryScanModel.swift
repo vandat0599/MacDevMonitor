@@ -36,12 +36,8 @@ final class MemoryScanModel {
             phase = .idle
             return
         }
-        let input = MemoryAdvisor.Input(
-            processes: processes, windowlessAppPaths: Self.windowlessApps(),
-            frontmostAppPath: NSWorkspace.shared.frontmostApplication?.bundleURL?.path, growth: app.growth,
-            bootedSimulators: app.snapshot.simulators?.devices.filter(\.isBooted) ?? [], thresholds: app.settings.thresholds)
         notice = nil
-        tasks = MemoryAdvisor.findings(input)
+        tasks = Self.findings(processes: processes, simulators: app.snapshot.simulators, app: app)
         // Everything found starts ticked; the user unticks what they want to keep.
         selected = Set(tasks.map(\.id))
         scannedAt = Date()
@@ -75,6 +71,14 @@ final class MemoryScanModel {
         try? await Task.sleep(for: .seconds(3))
         await app.refreshFast(includeProcesses: true)
         phase = .done
+    }
+
+    /// The Memory page's scan, also used by Deep Clean so both offer the same memory tasks.
+    static func findings(processes: ProcessSnapshot, simulators: SimulatorSnapshot?, app: AppModel) -> [CleanupTask] {
+        MemoryAdvisor.findings(MemoryAdvisor.Input(
+            processes: processes, windowlessAppPaths: windowlessApps(),
+            frontmostAppPath: NSWorkspace.shared.frontmostApplication?.bundleURL?.path, growth: app.growth,
+            bootedSimulators: simulators?.devices.filter(\.isBooted) ?? [], thresholds: app.settings.thresholds))
     }
 
     /// Regular apps that aren't frontmost and have no windows at all (minimised and hidden windows still count as windows).

@@ -293,6 +293,8 @@ public struct MachineSnapshot: Sendable {
     public var storage: StorageSnapshot?
     public var dev: DevSnapshot?
     public var apps: AppsSnapshot?
+    /// The Storage page's scan, when Deep Clean ran it.
+    public var systemStorage: SystemStorageSnapshot?
 
     public init() {}
 }

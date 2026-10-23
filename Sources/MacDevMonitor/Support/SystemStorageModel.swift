@@ -67,6 +67,14 @@ final class SystemStorageModel {
         phase = .ready
     }
 
+    /// Takes a scan Deep Clean just ran, so the Storage page shows it without scanning again.
+    func adopt(_ scanned: SystemStorageSnapshot) {
+        guard phase == .idle || phase == .ready else { return }
+        snapshot = scanned
+        selected = selected.intersection(scanned.groups.flatMap(\.entries).filter(\.canRemove).map(\.id))
+        phase = .ready
+    }
+
     func toggle(_ entry: StorageEntry) {
         guard entry.canRemove else { return }
         if selected.contains(entry.id) { selected.remove(entry.id) } else { selected.insert(entry.id) }

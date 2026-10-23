@@ -365,6 +365,8 @@ public struct AppsSnapshot: Sendable {
     public var canReadContainers: Bool
     /// Bytes of cache each app keeps (by app path), everywhere `AppCaches` looks.
     public var cacheSizes: [String: Int64] = [:]
+    /// Bytes of each cache folder, by path.
+    public var cachePathSizes: [String: Int64] = [:]
 
     public init(apps: [AppInfo], listing: LeftoverListing, orphans: [OrphanedAppData], canReadContainers: Bool) {
         self.apps = apps
@@ -383,7 +385,9 @@ public struct AppsSnapshot: Sendable {
 
     /// Measures every app's caches in one pass.
     public mutating func measureCaches() async {
-        cacheSizes = await AppCaches.measure(Dictionary(uniqueKeysWithValues: apps.map { ($0.path, caches(for: $0)) }))
+        let byApp = Dictionary(uniqueKeysWithValues: apps.map { ($0.path, caches(for: $0)) })
+        cachePathSizes = await SizeReader.sizes(of: Array(Set(byApp.values.flatMap { $0.map(\.path) })), maxAge: 600)
+        cacheSizes = byApp.mapValues { items in items.compactMap { cachePathSizes[$0.path] }.reduce(0, +) }
     }
 }
 

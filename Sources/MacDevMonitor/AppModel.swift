@@ -419,6 +419,13 @@ final class AppModel {
         case .gitGC(let repos): return await DevActions.gitGC(repos)
         case .quitApp(let bundleID, let name, let path): return await quitApp(bundleID: bundleID, name: name, path: path)
         case .trashAppData(let paths): return await AppUninstaller.trashOrphans(paths)
+        case .clearAppCaches(let requests):
+            var outcomes: [ActionOutcome] = []
+            for request in requests { outcomes.append(await AppCacheCleaner.clear(request.items, app: request.app)) }
+            let freed = outcomes.compactMap(\.freedBytes).reduce(0, +)
+            return Self.combine(outcomes, summary: "Cleared caches of \(outcomes.filter(\.succeeded).count) of \(requests.count) apps"
+                                + (freed > 0 ? ", freeing \(ByteSize.format(freed))" : ""))
+        case .removeStorage(let entries): return await SystemStorageActions.remove(entries)
         case .uninstallApps(let requests):
             var outcomes: [ActionOutcome] = []
             for request in requests { outcomes.append(await uninstall(request)) }

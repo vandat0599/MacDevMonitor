@@ -67,7 +67,7 @@ final class DeepCleanModel {
         [
             ScanStep(id: "memory", title: "Memory & swap", checks: "Free memory, pressure, swap and compressed memory", symbol: "memorychip"),
             ScanStep(id: "fseventsd", title: "fseventsd & system daemons", checks: "Whether macOS's file-change tracker or another process has bloated", symbol: "doc.badge.clock"),
-            ScanStep(id: "processes", title: "Leftover dev processes", checks: "Stuck Crashlytics uploads, tail -f, simctl, xcodebuild, lldb, idle Gradle daemons", symbol: "cpu"),
+            ScanStep(id: "processes", title: "What's holding memory", checks: "Dev leftovers, heavy helpers, idle and swapped-out apps, growing processes, dev servers, simulators", symbol: "cpu"),
             ScanStep(id: "worktrees", title: "Git worktrees", checks: "Stale entries, locks left by ended sessions, finished worktrees", symbol: "arrow.triangle.branch"),
             ScanStep(id: "build", title: "Xcode build data", checks: "DerivedData in Xcode's folder, /tmp copies and folders inside repos", symbol: "hammer"),
             ScanStep(id: "simulators", title: "Simulators", checks: "Unusable and running simulators, unused iOS runtimes", symbol: "iphone"),
@@ -76,7 +76,8 @@ final class DeepCleanModel {
             ScanStep(id: "projects", title: "Project build folders", checks: "node_modules, Rust target, virtualenvs, Pods, .next, Gradle/Flutter build in your repos", symbol: "shippingbox"),
             ScanStep(id: "docker", title: "Docker", checks: "Images, containers, volumes and build cache", symbol: "cube.transparent"),
             ScanStep(id: "git", title: "Git repositories", checks: "Loose objects and garbage that `git gc` can pack", symbol: "point.3.connected.trianglepath.dotted"),
-            ScanStep(id: "apps", title: "Applications", checks: "Apps unused for 90+ days and data left by apps you've deleted", symbol: "square.grid.2x2"),
+            ScanStep(id: "apps", title: "Applications", checks: "Apps unused for 90+ days, every app's caches, and data left by apps you've deleted", symbol: "square.grid.2x2"),
+            ScanStep(id: "storage", title: "System Data", checks: "AI models, app data, caches, logs, snapshots, installers, sound libraries and the Trash", symbol: "chart.pie"),
             ScanStep(id: "disk", title: "Disk space", checks: "Free space on the startup disk", symbol: "internaldrive"),
         ]
     }
@@ -117,11 +118,13 @@ final class DeepCleanModel {
             let biggest = processes.memory.first { $0.command != "fseventsd" }.map { " · largest: \($0.command) \(ByteSize.format($0.footprint))" } ?? ""
             return fs + biggest
         }
+        var memoryFindings: [CleanupTask]?
         await step("processes") {
-            let p = s.processes
-            let stuck = p?.stuck.count ?? 0
-            let daemons = p?.daemons.filter { $0.kind == .gradle || $0.kind == .kotlin }.count ?? 0
-            return "\(stuck) leftover\(stuck == 1 ? "" : "s") · \(daemons) Gradle/Kotlin daemon\(daemons == 1 ? "" : "s") · \(p?.zombies.count ?? 0) zombies"
+            guard let p = s.processes else { return "Couldn't read processes" }
+            let findings = MemoryScanModel.findings(processes: p, simulators: app.snapshot.simulators, app: app)
+            memoryFindings = findings
+            let held = findings.compactMap(\.memoryBytes).reduce(0, +)
+            return findings.isEmpty ? "Nothing worth freeing" : "\(findings.count) thing\(findings.count == 1 ? "" : "s") holding \(ByteSize.format(held))"
         }
         await step("worktrees") {
             let repos = await WorktreeReader.read(roots: roots, includeSizes: true)
@@ -179,7 +182,14 @@ final class DeepCleanModel {
             let apps = await AppModel.readApps(sizeMaxAge: 600)
             s.apps = apps
             let unused = apps.apps.filter { !$0.isProtected && ($0.unusedDays() ?? 0) >= 90 }
-            return "\(apps.apps.count) apps · \(unused.count) unused for 90+ days · \(apps.orphans.count) leftovers of deleted apps"
+            return "\(apps.apps.count) apps · \(ByteSize.format(apps.cacheSizes.values.reduce(0, +))) of caches · \(unused.count) unused for 90+ days · \(apps.orphans.count) leftovers of deleted apps"
+        }
+        await step("storage") {
+            let storage = await Task.detached { await SystemStorageScanner().scan() }.value
+            s.systemStorage = storage
+            app.systemStorage.adopt(storage)
+            let note = FullDiskAccess.isGranted ? "" : " · grant Full Disk Access to see everything"
+            return "\(ByteSize.format(storage.total)) of system and app data · \(ByteSize.format(storage.removable)) removable" + note
         }
         await step("disk") {
             let disk = DiskReader.read()
@@ -188,7 +198,9 @@ final class DeepCleanModel {
         }
 
         await app.adopt(s)
-        plan = CleanupPlanner.plan(s, thresholds: app.settings.thresholds)
+        // Recomputed with this scan's simulators, read after the memory step.
+        if let p = s.processes { memoryFindings = MemoryScanModel.findings(processes: p, simulators: s.simulators, app: app) }
+        plan = CleanupPlanner.plan(s, thresholds: app.settings.thresholds, memoryFindings: memoryFindings)
         selectRecommended()
         scannedAt = Date()
         phase = .review

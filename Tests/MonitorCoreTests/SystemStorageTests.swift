@@ -184,7 +184,7 @@ import Testing
 
     @Test func cachesThatHoldMoreThanCacheStayPut() {
         #expect(CacheEntries.classify(name: "org.swift.swiftpm").removable)
-        #expect(CacheEntries.classify(name: "org.swift.swiftpm").risk == .rebuilds)
+        #expect(CacheEntries.classify(name: "org.swift.swiftpm").risk == .caution)
         #expect(!CacheEntries.classify(name: "JetBrains").removable)
         #expect(!CacheEntries.classify(name: "com.apple.bird").removable)
         #expect(CacheEntries.classify(name: "com.spotify.client").removable)
