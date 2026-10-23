@@ -162,6 +162,7 @@ public enum Actions {
         guard let cwds = await workingDirectories() else {
             return ActionOutcome(succeeded: false, summary: "Couldn't check which processes are using these folders, so nothing was deleted")
         }
+        let openProjects = await ClaudeSessions.activeProjectFolderNames()
 
         var freed: Int64 = 0
         var removed = 0
@@ -181,9 +182,15 @@ public enum Actions {
                 details.append("Skipped \(name): PID \(users.map(String.init).joined(separator: ", ")) is working inside it.")
                 continue
             }
-            if isSessionScratch(path, policy: policy), SizeReader.recentlyModified(path, within: 86_400, depth: 3) {
-                details.append("Skipped \(name): a Claude session used it in the last day.")
-                continue
+            if isSessionScratch(path, policy: policy) {
+                if openProjects.contains(name) {
+                    details.append("Skipped \(name): a Claude session for that project is still open.")
+                    continue
+                }
+                if SizeReader.recentlyModified(path, within: 86_400, depth: 3) {
+                    details.append("Skipped \(name): a Claude session used it in the last day.")
+                    continue
+                }
             }
             do {
                 let url = URL(fileURLWithPath: path)
@@ -218,6 +225,19 @@ public enum Actions {
 
     public static func deleteSimulator(udid: String, freeing bytes: Int64?) async -> ActionOutcome {
         await simctl(["delete", udid], summary: "Deleted simulator", freed: bytes)
+    }
+
+    /// Shuts down only the listed devices, so simulators booted after a scan are left running.
+    public static func shutdownSimulators(_ udids: [String]) async -> ActionOutcome {
+        var details: [String] = []
+        for udid in udids {
+            guard let result = try? await Shell.run("/usr/bin/xcrun", ["simctl", "shutdown", udid], timeout: 120) else { continue }
+            // simctl errors when the device is already shut down; that's the outcome we wanted.
+            if !result.succeeded, !result.error.contains("current state: Shutdown") {
+                details.append(result.error.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
+        return ActionOutcome(succeeded: details.isEmpty, summary: "Shut down \(udids.count - details.count) of \(udids.count) simulators", details: details)
     }
 
     public static func shutdownAllSimulators() async -> ActionOutcome {

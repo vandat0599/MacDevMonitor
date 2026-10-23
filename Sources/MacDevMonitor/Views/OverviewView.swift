@@ -72,6 +72,7 @@ struct OverviewView: View {
             VStack(alignment: .leading, spacing: 18) {
                 PageHeader(title: "Overview", subtitle: uptimeLine)
                 MetricGrid()
+                deepCleanBanner
 
                 SectionCard(title: "Issues", subtitle: model.issues.isEmpty ? nil : "Every fix asks before it changes anything.") {
                     if model.issues.isEmpty {
@@ -103,6 +104,29 @@ struct OverviewView: View {
             }
             .padding(24)
         }
+    }
+
+    private var deepCleanBanner: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "sparkles").font(.title).foregroundStyle(.green)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Make this Mac fresh").font(.headline)
+                Text("Scan memory, processes, worktrees, build data, simulators and caches in one go, then pick what to clean.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                model.selectedSection = .deepClean
+                if model.deepClean.shouldRescanOnOpen { Task { model.deepClean.reset(); await model.deepClean.scan(model) } }
+            } label: {
+                Label("Deep Clean…", systemImage: "sparkles").padding(.horizontal, 6)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+        }
+        .padding(16)
+        .background(LinearGradient(colors: [.green.opacity(0.12), .cyan.opacity(0.08)], startPoint: .leading, endPoint: .trailing),
+                    in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var uptimeLine: String {

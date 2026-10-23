@@ -40,7 +40,7 @@ public enum StorageReader {
             let path = temp + "/" + name
             var isDirectory: ObjCBool = false
             guard fm.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else { continue }
-            items.append(StorageItem(kind: .claudeTemp, path: path, size: nil, lastModified: SizeReader.modificationDate(path)))
+            items.append(StorageItem(kind: .claudeTemp, path: path, size: nil, lastModified: SizeReader.latestModification(path, depth: 3)))
         }
 
         if includeSizes {
@@ -50,6 +50,7 @@ public enum StorageReader {
 
         let snapshots = (try? await Shell.run("/usr/bin/tmutil", ["listlocalsnapshots", "/"], timeout: 30))?.output ?? ""
         let snapshotCount = snapshots.split(separator: "\n").filter { $0.contains("com.apple.TimeMachine") }.count
-        return StorageSnapshot(items: items, timeMachineSnapshots: snapshotCount)
+        return StorageSnapshot(items: items, timeMachineSnapshots: snapshotCount,
+                               activeClaudeProjects: await ClaudeSessions.activeProjectFolderNames())
     }
 }

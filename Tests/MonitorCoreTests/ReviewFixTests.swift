@@ -63,3 +63,11 @@ import Testing
         #expect(result?.succeeded != true)
     }
 }
+
+@Suite struct ClaudeSessionTests {
+    @Test func projectFolderNameMatchesClaudeCodesEncoding() {
+        #expect(ClaudeSessions.projectFolderName(for: "/Users/dat/Documents/GitHub/Coverstar/spotlight-ios/.claude/worktrees/admiring-gauss-f5a2a5")
+                == "-Users-dat-Documents-GitHub-Coverstar-spotlight-ios--claude-worktrees-admiring-gauss-f5a2a5")
+        #expect(ClaudeSessions.projectFolderName(for: "/Users/dat") == "-Users-dat")
+    }
+}

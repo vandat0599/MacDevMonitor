@@ -258,10 +258,13 @@ public struct StorageItem: Sendable, Hashable, Identifiable {
 public struct StorageSnapshot: Sendable, Hashable {
     public var items: [StorageItem]
     public var timeMachineSnapshots: Int
+    /// Claude temp folder names of projects a running `claude` process is in.
+    public var activeClaudeProjects: Set<String>
 
-    public init(items: [StorageItem], timeMachineSnapshots: Int) {
+    public init(items: [StorageItem], timeMachineSnapshots: Int, activeClaudeProjects: Set<String> = []) {
         self.items = items
         self.timeMachineSnapshots = timeMachineSnapshots
+        self.activeClaudeProjects = activeClaudeProjects
     }
 }
 

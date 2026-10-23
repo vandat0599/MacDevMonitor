@@ -20,7 +20,20 @@ enum SnapshotRunner {
                 await render(SectionContent(section: section).environment(model), size: CGSize(width: 980, height: 1500),
                              to: "\(outputDirectory)/\(section.rawValue.replacingOccurrences(of: " ", with: "-")).png")
             }
-            await render(MenuBarView().environment(model), size: CGSize(width: 360, height: 520), to: "\(outputDirectory)/MenuBar.png")
+            await render(MenuBarView().environment(model), size: CGSize(width: 360, height: 600), to: "\(outputDirectory)/MenuBar.png")
+            // Deep Clean's scan only reads; it never cleans here.
+            await model.deepClean.scan(model)
+            await render(DeepCleanView().environment(model), size: CGSize(width: 980, height: 2600),
+                         to: "\(outputDirectory)/Deep-Clean-Review.png")
+            // Test hook: clean one task, but only when every item in it is a throwaway "MDMTest" fixture.
+            if let id = ProcessInfo.processInfo.environment["MDM_SNAPSHOT_CLEAN"],
+               let task = model.deepClean.plan.first(where: { $0.id == id }),
+               !task.items.isEmpty, task.items.allSatisfy({ $0.label.hasPrefix("MDMTest") }) {
+                model.deepClean.selected = [id]
+                await model.deepClean.clean(model)
+                await render(DeepCleanView().environment(model), size: CGSize(width: 980, height: 1800),
+                             to: "\(outputDirectory)/Deep-Clean-Done.png")
+            }
             exit(0)
         }
         app.run()

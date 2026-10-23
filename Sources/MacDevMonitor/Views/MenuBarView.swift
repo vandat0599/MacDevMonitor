@@ -59,6 +59,17 @@ struct MenuBarView: View {
 
             Divider()
 
+            Button {
+                model.selectedSection = .deepClean
+                openWindow(id: "dashboard")
+                NSApp.activate()
+                if model.deepClean.shouldRescanOnOpen { Task { model.deepClean.reset(); await model.deepClean.scan(model) } }
+            } label: {
+                Label("Deep Clean…", systemImage: "sparkles").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+
             HStack {
                 Button("Open Dashboard") {
                     openWindow(id: "dashboard")

@@ -3,6 +3,7 @@ import SwiftUI
 
 enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
     case overview = "Overview"
+    case deepClean = "Deep Clean"
     case memory = "Memory"
     case processes = "Processes"
     case worktrees = "Worktrees"
@@ -16,6 +17,7 @@ enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
     var symbol: String {
         switch self {
         case .overview: "gauge.with.dots.needle.50percent"
+        case .deepClean: "sparkles"
         case .memory: "memorychip"
         case .processes: "cpu"
         case .worktrees: "arrow.triangle.branch"
@@ -29,7 +31,7 @@ enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
     /// Issue id prefixes shown as this section's badge.
     var issueIDs: [String] {
         switch self {
-        case .overview, .activity: []
+        case .overview, .deepClean, .activity: []
         case .memory: ["fseventsd", "free-memory", "swap", "uptime", "large-"]
         case .processes: ["stuck", "zombies"]
         case .worktrees: ["worktrees"]

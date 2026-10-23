@@ -3,19 +3,20 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
-    @State private var selection: DashboardSection? = .overview
 
     var body: some View {
         @Bindable var model = model
         NavigationSplitView {
-            List(DashboardSection.allCases, selection: $selection) { section in
+            List(DashboardSection.allCases, selection: Binding<DashboardSection?>(
+                get: { model.selectedSection },
+                set: { model.selectedSection = $0 ?? .overview })) { section in
                 Label(section.rawValue, systemImage: section.symbol)
                     .badge(model.issueCount(for: section))
                     .tag(section)
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
-            SectionContent(section: selection ?? .overview)
+            SectionContent(section: model.selectedSection)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .overlay(alignment: .bottom) { ActionBanner() }
         }
@@ -48,6 +49,7 @@ struct SectionContent: View {
     var body: some View {
         switch section {
         case .overview: OverviewView()
+        case .deepClean: DeepCleanView()
         case .memory: MemoryView()
         case .processes: ProcessesView()
         case .worktrees: WorktreesView()

@@ -16,6 +16,22 @@ bash scripts/bundle.sh
 This builds a release binary, wraps it in `Mac Dev Monitor.app` with an icon, signs it ad hoc and copies it to
 `~/Applications`. Open it from there. Use `--no-install` to only build `dist/Mac Dev Monitor.app`.
 
+## Deep Clean
+
+One button (menu bar, Overview, or the Deep Clean page) that makes the Mac fresh again:
+
+1. **Scan** — checks, with live progress: memory & swap, fseventsd & system daemons, leftover dev processes,
+   git worktrees, Xcode build data, simulators, caches & temp folders, disk space. Scanning changes nothing.
+2. **Review** — every cleanable thing as a checkbox with what it frees (disk or RAM), a safety label and the exact items.
+   Pre-ticked (*Recommended*) are only leftovers: a bloated fseventsd, stuck dev processes, stale worktree entries,
+   orphaned build folders, /tmp build copies idle a day, unusable simulators, device symbols unused for 30 days,
+   and Claude temp folders idle a day whose session is closed.
+   Work in progress stays unticked: running simulators, Gradle daemons, idle worktrees, build folders used today or inside
+   repos, build data for current projects, Xcode's module cache, unused runtimes, restarting the Mac.
+   A review older than 5 minutes must be rescanned before it can clean.
+3. **Clean** — runs the ticked items in a safe order (stop processes → delete → restart fseventsd → restart last),
+   each re-checking the Mac first, then shows before vs. now for memory, swap, disk and fseventsd and the space freed.
+
 ## What it watches
 
 | Page | Shows | Can do (always after a confirmation) |

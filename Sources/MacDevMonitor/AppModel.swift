@@ -39,6 +39,8 @@ final class AppModel {
     static let shared = AppModel()
 
     let settings = AppSettings()
+    let deepClean = DeepCleanModel()
+    var selectedSection: DashboardSection = .overview
     private(set) var snapshot = MachineSnapshot()
     private(set) var issues: [HealthIssue] = []
     private(set) var history: [MemorySample] = []
@@ -132,6 +134,22 @@ final class AppModel {
         snapshot.storage = await storage
         lastFullScan = Date()
         reevaluate()
+    }
+
+    /// Takes the slow sections from a scan Deep Clean just finished, so every page shows them. Memory, disk and processes
+    /// are re-read rather than copied: the scan read them minutes ago.
+    func adopt(_ scanned: MachineSnapshot) async {
+        snapshot.worktrees = scanned.worktrees
+        snapshot.derivedData = scanned.derivedData
+        snapshot.simulators = scanned.simulators
+        snapshot.storage = scanned.storage
+        lastFullScan = Date()
+        await refreshFast(includeProcesses: true)
+    }
+
+    /// Lets Deep Clean hold the same lock as single fixes, so the two never act at once.
+    func setRunningAction(_ label: String?) {
+        runningAction = label
     }
 
     private func recordSample() {
@@ -280,25 +298,75 @@ final class AppModel {
         case .terminate(let targets): return await Actions.terminate(targets)
         case .cleanWorktrees(let prune, let unlock): return await Actions.cleanWorktrees(prune: prune, unlock: unlock)
         case .deleteDerivedData(let paths):
-            // One-click fixes come from a scan that may be 30 minutes old; keep only folders that are still orphaned or idle.
-            let current = await DerivedDataReader.read(repoRoots: settings.repoRoots, includeSizes: false)
-            let stillStale = Set(current.filter { $0.status.isOrphan || ($0.lastUsed.map { Date().timeIntervalSince($0) > 86_400 } ?? false) }.map(\.path))
-            let paths = paths.filter(stillStale.contains)
-            guard !paths.isEmpty else { return ActionOutcome(succeeded: true, summary: "Nothing to delete: those folders were used since the scan") }
-            return await Actions.deleteFolders(paths, moveToTrash: settings.moveToTrash)
+            return await deleteStaleBuildFolders(paths)
         case .deleteUnavailableSimulators:
             let size = snapshot.simulators?.unavailable.reduce(0) { $0 + $1.dataSize }
             return await Actions.deleteUnavailableSimulators(freeing: size)
         }
     }
 
+    /// Fixes and Deep Clean act on a scan that may be minutes old; keep only folders that are still orphaned or idle.
+    private func deleteStaleBuildFolders(_ paths: [String]) async -> ActionOutcome {
+        let current = await DerivedDataReader.read(repoRoots: settings.repoRoots, includeSizes: false)
+        let stillStale = Set(current.filter { $0.status.isOrphan || ($0.lastUsed.map { Date().timeIntervalSince($0) > 86_400 } ?? false) }.map(\.path))
+        let kept = paths.filter(stillStale.contains)
+        guard !kept.isEmpty else { return ActionOutcome(succeeded: true, summary: "Nothing to delete: those folders were used since the scan") }
+        var outcome = await Actions.deleteFolders(kept, moveToTrash: settings.moveToTrash)
+        if kept.count < paths.count { outcome.details.insert("\(paths.count - kept.count) were used since the scan and were kept.", at: 0) }
+        return outcome
+    }
+
+    func executeCleanup(_ action: CleanupAction, sizeHint: Int64?) async -> ActionOutcome {
+        let trash = settings.moveToTrash
+        switch action {
+        case .terminate(let targets): return await Actions.terminate(targets)
+        case .shutdownSimulators(let udids): return await Actions.shutdownSimulators(udids)
+        case .cleanWorktrees(let prune, let unlock): return await Actions.cleanWorktrees(prune: prune, unlock: unlock)
+        case .removeWorktrees(let refs):
+            var outcomes: [ActionOutcome] = []
+            for ref in refs { outcomes.append(await Actions.removeWorktree(ref)) }
+            return Self.combine(outcomes, summary: "Removed \(outcomes.filter(\.succeeded).count) of \(refs.count) worktrees")
+        case .deleteStaleBuildFolders(let paths): return await deleteStaleBuildFolders(paths)
+        case .deleteFolders(let paths): return await Actions.deleteFolders(paths, moveToTrash: trash)
+        case .deleteIdleFolders(let paths, let idleDays):
+            // Re-check: anything that changed since the scan is kept.
+            let idle = paths.filter { !SizeReader.recentlyModified($0, within: idleDays * 86_400, depth: 3) }
+            guard !idle.isEmpty else { return ActionOutcome(succeeded: true, summary: "Nothing to delete: those folders were used since the scan") }
+            var outcome = await Actions.deleteFolders(idle, moveToTrash: trash)
+            if idle.count < paths.count { outcome.details.insert("\(paths.count - idle.count) were used since the scan and were kept.", at: 0) }
+            return outcome
+        case .deleteUnavailableSimulators: return await Actions.deleteUnavailableSimulators(freeing: sizeHint)
+        case .deleteRuntimes(let ids):
+            var outcomes: [ActionOutcome] = []
+            for id in ids {
+                let size = snapshot.simulators?.runtimes.first { $0.identifier == id }?.sizeBytes
+                outcomes.append(await Actions.deleteRuntime(identifier: id, freeing: size))
+            }
+            return Self.combine(outcomes, summary: "Deleted \(outcomes.filter(\.succeeded).count) of \(ids.count) runtimes")
+        case .restartFseventsd: return await Actions.restartFseventsd()
+        case .restartMac: return await Actions.restartMac()
+        }
+    }
+
+    private static func combine(_ outcomes: [ActionOutcome], summary: String) -> ActionOutcome {
+        let freed = outcomes.compactMap(\.freedBytes).reduce(0, +)
+        return ActionOutcome(succeeded: outcomes.allSatisfy(\.succeeded), summary: summary,
+                             details: outcomes.filter { !$0.succeeded }.flatMap { [$0.summary] + $0.details },
+                             freedBytes: freed > 0 ? freed : nil)
+    }
+
+    /// Adds an outcome to the activity log without showing the banner.
+    func record(_ outcome: ActionOutcome) {
+        activity.insert(ActivityEntry(outcome: outcome), at: 0)
+        ActivityLog.save(activity)
+    }
+
     private func run(_ label: String, _ work: () async -> ActionOutcome) async {
         runningAction = label
         let outcome = await work()
         runningAction = nil
-        let entry = ActivityEntry(outcome: outcome)
-        activity.insert(entry, at: 0)
-        ActivityLog.save(activity)
+        record(outcome)
+        let entry = activity[0]
         banner = entry
         Task {
             try? await Task.sleep(for: .seconds(8))

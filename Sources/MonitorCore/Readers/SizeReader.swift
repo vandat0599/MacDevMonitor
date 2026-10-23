@@ -47,17 +47,22 @@ public enum SizeReader {
 
     /// True when the folder or anything up to `depth` levels inside it changed within `interval`.
     public static func recentlyModified(_ path: String, within interval: TimeInterval, depth: Int) -> Bool {
-        let cutoff = Date().addingTimeInterval(-interval)
-        if let date = modificationDate(path), date > cutoff { return true }
+        latestModification(path, depth: depth).map { Date().timeIntervalSince($0) < interval } ?? false
+    }
+
+    /// The newest modification date of the folder and anything up to `depth` levels inside it.
+    /// A folder's own date only changes when its direct children do, so it can look idle while files deeper down change.
+    public static func latestModification(_ path: String, depth: Int) -> Date? {
+        var latest = modificationDate(path)
         guard let enumerator = FileManager.default.enumerator(
-            at: URL(fileURLWithPath: path), includingPropertiesForKeys: [.contentModificationDateKey]) else { return false }
+            at: URL(fileURLWithPath: path), includingPropertiesForKeys: [.contentModificationDateKey]) else { return latest }
         for case let url as URL in enumerator {
             if enumerator.level >= depth { enumerator.skipDescendants() }
-            if let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, date > cutoff {
-                return true
+            if let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate {
+                latest = max(latest ?? date, date)
             }
         }
-        return false
+        return latest
     }
 
     public static func modificationDate(_ path: String) -> Date? {
