@@ -35,7 +35,7 @@ and cleans up only what you tick.
 
 ## Install
 
-Download **Mac Dev Monitor.zip** from [Releases](../../releases/latest), unzip it and move the app to Applications.
+Download **Mac.Dev.Monitor.zip** from [Releases](../../releases/latest), unzip it and move the app to Applications.
 
 It isn't notarized by Apple, so macOS blocks the first launch. Allow it once in
 **System Settings › Privacy & Security › Open Anyway**, or run:
