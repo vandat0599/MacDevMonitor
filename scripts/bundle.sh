@@ -10,8 +10,8 @@ VERSION="1.0.0"
 DIST="dist"
 APP="$DIST/$APP_NAME.app"
 
-swift build -c release
-BIN="$(swift build -c release --show-bin-path)/MacDevMonitor"
+swift build -c release --arch arm64 --arch x86_64
+BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/MacDevMonitor"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
