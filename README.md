@@ -1,6 +1,6 @@
 # Mac Dev Monitor
 
-### Your Mac is crawling. Let's find out who's to blame.
+### ⚠️ Your Mac is crawling. Let's find out who's to blame.
 
 <p align="center"><img src="docs/screenshots/out-of-memory.png" width="520" alt="macOS: Your system has run out of application memory"></p>
 
