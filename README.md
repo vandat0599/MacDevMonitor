@@ -2,7 +2,10 @@
 
 ### Your Mac is crawling. Let's find out who's to blame.
 
-Swap full, fans spinning, "Your system has run out of application memory"… and Activity Monitor just shrugs.
+<p align="center"><img src="docs/screenshots/out-of-memory.png" width="520" alt="macOS: Your system has run out of application memory"></p>
+
+Seen this one? Xcode paused, Claude paused, swap full, fans screaming… and Activity Monitor just shrugs.
+This app was born the day that dialog showed up on a 24 GB Mac.
 Mac Dev Monitor checks every corner of your Mac, names what's eating your RAM and disk, explains it in plain words,
 and cleans up only what you tick.
 
